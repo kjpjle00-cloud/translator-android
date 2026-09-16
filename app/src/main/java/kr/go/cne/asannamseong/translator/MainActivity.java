@@ -437,7 +437,7 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public String appVersion() { return "0.3-native-speech-fix"; }
+        public String appVersion() { return "0.4-faster-speech"; }
     }
 
     @Override
@@ -469,6 +469,31 @@ public class MainActivity extends Activity {
   if(window.__namseongNativePatched) return;
   window.__namseongNativePatched=true;
 
+  // Shorten Android's post-recognition wait; retain final-result safeguards.
+  if(window.SpeechSession && window.SpeechSession.VERSION==='6.7'){
+    window.SpeechSession.prototype.arm=function(){
+      if(this.closed || this.stopping) return;
+      this.clearSilence();
+      this.deadline=Date.now()+1200;
+      const tick=()=>{
+        const remaining=this.deadline-Date.now();
+        if(remaining<=0){ this.stopForFinal(); return; }
+        this.options.state('waiting',Math.ceil(remaining/1000));
+        this.silenceTimer=setTimeout(tick,Math.min(250,remaining));
+      };
+      tick();
+    };
+    const hint=document.getElementById('workspaceHint');
+    if(hint){
+      const updateHint=()=>{
+        const text=hint.textContent;
+        const updated=text.replace('3초 후 자동 번역','1.2초 후 자동 번역');
+        if(text!==updated) hint.textContent=updated;
+      };
+      new MutationObserver(updateHint).observe(hint,{childList:true,subtree:true,characterData:true});
+      updateHint();
+    }
+  }
   const utterances={}; let utterSeq=0;
   function safe(fn,arg){ try{ if(typeof fn==='function') fn(arg); }catch(e){ console.warn(e); } }
 if(window.AndroidAudio){
