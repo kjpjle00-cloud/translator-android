@@ -10,12 +10,26 @@ android {
         applicationId 'kr.go.cne.asannamseong.translator'
         minSdk 28
         targetSdk 35
-versionCode 3
-versionName '0.3-native-speech-fix'
+        versionCode 3
+        versionName '0.3-native-speech-fix'
+    }
+
+    signingConfigs {
+        release {
+            def keystorePath = System.getenv('ANDROID_KEYSTORE_PATH')
+            if (keystorePath) {
+                storeFile file(keystorePath)
+            }
+            storeType 'PKCS12'
+            storePassword System.getenv('ANDROID_KEYSTORE_PASSWORD')
+            keyAlias System.getenv('ANDROID_KEY_ALIAS')
+            keyPassword System.getenv('ANDROID_KEY_PASSWORD')
+        }
     }
 
     buildTypes {
         release {
+            signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
