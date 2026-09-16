@@ -1,0 +1,10 @@
+1. 이 ZIP을 PC에서 압축 풉니다.
+2. GitHub의 kjpjle00-cloud/translator-android 저장소를 엽니다.
+3. 저장소 화면에서 'uploading an existing file' 또는 Add file > Upload files 를 누릅니다.
+4. 압축을 푼 translator-android_repo-ready 폴더 안의 모든 파일/폴더를 업로드 영역으로 드래그합니다.
+   중요: translator-android_repo-ready 폴더 자체가 아니라 그 안의 내용물이 저장소 맨 위에 와야 합니다.
+5. Commit changes를 누릅니다.
+6. 상단 Actions 탭 > Build Android APK 실행 결과가 초록색 체크가 될 때까지 기다립니다.
+7. 실행 결과 아래 Artifacts의 NamseongTranslator-debug를 누릅니다.
+8. 스마트폰으로 ZIP을 옮기거나 GitHub를 스마트폰에서 열어 다운로드합니다.
+9. 압축을 풀고 app-debug.apk를 눌러 설치합니다.
