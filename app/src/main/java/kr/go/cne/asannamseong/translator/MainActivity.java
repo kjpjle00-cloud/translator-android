@@ -437,7 +437,7 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public String appVersion() { return "0.2-integrated-earphone"; }
+        public String appVersion() { return "0.3-native-speech-fix"; }
     }
 
     @Override
@@ -472,49 +472,49 @@ public class MainActivity extends Activity {
   const utterances={}; let utterSeq=0;
   function safe(fn,arg){ try{ if(typeof fn==='function') fn(arg); }catch(e){ console.warn(e); } }
 if(window.AndroidAudio){
-    if(typeof window.SpeechSynthesisUtterance!=='function'){
-      window.SpeechSynthesisUtterance=function(text){
-        this.text=String(text||'');
-        this.lang='';
-        this.rate=1;
-        this.pitch=1;
-        this.volume=1;
-        this.onstart=null;
-        this.onend=null;
-        this.onerror=null;
-      };
-    }
-
-    if(!window.speechSynthesis) window.speechSynthesis={};
-
-    window.speechSynthesis.speak=function(u){
-      const id='u'+Date.now()+'_'+(++utterSeq);
-      utterances[id]=u;
-      AndroidAudio.speak(id,String(u?.text||''),String(u?.lang||''));
-    };
-
-    window.speechSynthesis.cancel=function(){
-      try{AndroidAudio.stopTts();}catch(e){}
-      Object.keys(utterances).forEach(id=>{
-        const u=utterances[id];
-        safe(u?.onerror,{error:'canceled'});
-        delete utterances[id];
-      });
-    };
-
-    window.speechSynthesis.pause=function(){};
-    window.speechSynthesis.resume=function(){};
-    window.speechSynthesis.getVoices=function(){return [];};
-    window.speechSynthesis.speak=function(u){
-      const id='u'+Date.now()+'_'+(++utterSeq);
-      utterances[id]=u;
-      AndroidAudio.speak(id,String(u.text||''),String(u.lang||''));
-    };
-    window.speechSynthesis.cancel=function(){
-      try{AndroidAudio.stopTts();}catch(e){}
-      Object.keys(utterances).forEach(id=>{ const u=utterances[id]; safe(u.onerror,{error:'canceled'}); delete utterances[id]; });
+  if(typeof window.SpeechSynthesisUtterance!=='function'){
+    window.SpeechSynthesisUtterance=function(text){
+      this.text=String(text||'');
+      this.lang='';
+      this.rate=1;
+      this.pitch=1;
+      this.volume=1;
+      this.onstart=null;
+      this.onend=null;
+      this.onerror=null;
     };
   }
+
+  if(!window.speechSynthesis){
+    window.speechSynthesis={};
+  }
+
+  window.speechSynthesis.speak=function(u){
+    const id='u'+Date.now()+'_'+(++utterSeq);
+    utterances[id]=u;
+    AndroidAudio.speak(
+      id,
+      String((u&&u.text)||''),
+      String((u&&u.lang)||'')
+    );
+  };
+
+  window.speechSynthesis.cancel=function(){
+    try{
+      AndroidAudio.stopTts();
+    }catch(e){}
+
+    Object.keys(utterances).forEach(id=>{
+      const u=utterances[id];
+      safe(u&&u.onerror,{error:'canceled'});
+      delete utterances[id];
+    });
+  };
+
+  window.speechSynthesis.pause=function(){};
+  window.speechSynthesis.resume=function(){};
+  window.speechSynthesis.getVoices=function(){return [];};
+}
   window.__nativeTtsEvent=function(id,type,detail){
     const u=utterances[id]; if(!u) return;
     if(type==='start') safe(u.onstart,{type:'start'});
