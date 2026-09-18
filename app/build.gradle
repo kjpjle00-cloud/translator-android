@@ -10,8 +10,8 @@ android {
         applicationId 'kr.go.cne.asannamseong.translator'
         minSdk 28
         targetSdk 36
-        versionCode 8
-        versionName '0.8'
+        versionCode 9
+        versionName '0.9'
     }
 
     signingConfigs {
