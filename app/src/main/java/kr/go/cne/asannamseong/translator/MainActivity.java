@@ -3,7 +3,7 @@ package kr.go.cne.asannamseong.translator;
 import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
-import android.content.pm.PackageManager;top:max(8px,env(safe-area-inset-top));
+import android.content.pm.PackageManager;
 import android.media.AudioAttributes;
 import android.media.AudioDeviceInfo;
 import android.media.AudioDeviceCallback;
