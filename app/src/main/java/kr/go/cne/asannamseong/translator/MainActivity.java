@@ -142,12 +142,45 @@ public class MainActivity extends Activity {
             ttsReady = status == TextToSpeech.SUCCESS;
             if (ttsReady) {
                 tts.setSpeechRate(0.94f);
-                tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
-                    @Override public void onStart(String utteranceId) { }
-                    @Override public void onError(String utteranceId) { handleTtsSynthesisError(utteranceId, "TTS_ERROR"); }
-                    @Override public void onError(String utteranceId, int errorCode) { handleTtsSynthesisError(utteranceId, "TTS_ERROR_" + errorCode); }
-                    @Override public void onDone(String utteranceId) { handleTtsFileReady(utteranceId); }
-                });
+               tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+    @Override
+    public void onStart(String utteranceId) {
+        if (utteranceId != null && utteranceId.startsWith("direct_")) {
+            String jsId = utteranceId.substring(7);
+            js("window.__nativeTtsEvent && window.__nativeTtsEvent(" + q(jsId) + ",'start','')");
+        }
+    }
+
+    @Override
+    public void onError(String utteranceId) {
+        if (utteranceId != null && utteranceId.startsWith("direct_")) {
+            String jsId = utteranceId.substring(7);
+            js("window.__nativeTtsEvent && window.__nativeTtsEvent(" + q(jsId) + ",'error','TTS_ERROR')");
+        } else {
+            handleTtsSynthesisError(utteranceId, "TTS_ERROR");
+        }
+    }
+
+    @Override
+    public void onError(String utteranceId, int errorCode) {
+        if (utteranceId != null && utteranceId.startsWith("direct_")) {
+            String jsId = utteranceId.substring(7);
+            js("window.__nativeTtsEvent && window.__nativeTtsEvent(" + q(jsId) + ",'error','TTS_ERROR_" + errorCode + "')");
+        } else {
+            handleTtsSynthesisError(utteranceId, "TTS_ERROR_" + errorCode);
+        }
+    }
+
+    @Override
+    public void onDone(String utteranceId) {
+        if (utteranceId != null && utteranceId.startsWith("direct_")) {
+            String jsId = utteranceId.substring(7);
+            js("window.__nativeTtsEvent && window.__nativeTtsEvent(" + q(jsId) + ",'end','')");
+        } else {
+            handleTtsFileReady(utteranceId);
+        }
+    }
+});
             }
         });
     }
@@ -391,13 +424,39 @@ public class MainActivity extends Activity {
                 }
                 stopPlayer();
                 tts.stop();
+
+                if ("speaker".equals(target)) {
+                    tts.setAudioAttributes(new AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build());
+
+                    String directId = "direct_" + jsId;
+                    int result = tts.speak(
+                            text,
+                            TextToSpeech.QUEUE_FLUSH,
+                            new Bundle(),
+                            directId
+                    );
+
+                    if (result != TextToSpeech.SUCCESS) {
+                        js("window.__nativeTtsEvent && window.__nativeTtsEvent("
+                                + q(jsId) + ",'error','SPEAK_FAILED')");
+                    }
+                    return;
+                }
+
                 String nativeId = "tts_" + UUID.randomUUID();
                 File f = new File(getCacheDir(), nativeId + ".wav");
                 PendingTts p = new PendingTts(jsId, f, target);
                 synchronized (pendingTts) { pendingTts.put(nativeId, p); }
+
                 Bundle params = new Bundle();
                 int result = tts.synthesizeToFile(text, params, f, nativeId);
-                if (result != TextToSpeech.SUCCESS) handleTtsSynthesisError(nativeId, "SYNTH_QUEUE_FAILED");
+
+                if (result != TextToSpeech.SUCCESS) {
+                    handleTtsSynthesisError(nativeId, "SYNTH_QUEUE_FAILED");
+                }
             });
         }
 
