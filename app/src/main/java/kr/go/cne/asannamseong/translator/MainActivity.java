@@ -483,6 +483,15 @@ public class MainActivity extends Activity {
       };
       tick();
     };
+        window.SpeechSession.prototype.stopForFinal=function(){
+      if(this.closed || this.stopping) return;
+      this.stopping=true;
+      this.clearSilence();
+      this.options.state('finalizing');
+      if(this.ended){ this.finish(); return; }
+      this.finalTimer=setTimeout(()=>this.finish(),500);
+      try{ this.recognition.stop(); }catch(e){ this.finish(); }
+    };
     const hint=document.getElementById('workspaceHint');
     if(hint){
       const updateHint=()=>{
