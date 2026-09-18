@@ -3,7 +3,7 @@ package kr.go.cne.asannamseong.translator;
 import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
-import android.content.pm.PackageManager;
+import android.content.pm.PackageManager;top:max(8px,env(safe-area-inset-top));
 import android.media.AudioAttributes;
 import android.media.AudioDeviceInfo;
 import android.media.AudioDeviceCallback;
@@ -587,7 +587,7 @@ if(window.AndroidAudio){
   function installStatus(){
     if(document.getElementById('nativeEarphoneStatus')) return;
     const bar=document.createElement('button'); bar.id='nativeEarphoneStatus'; bar.type='button';
-    bar.style.cssText='position:fixed;z-index:99999;right:8px;top:max(8px,env(safe-area-inset-top));background:#0f5c55;color:white;border:0;padding:8px 11px;border-radius:999px;font:700 11px system-ui;box-shadow:0 3px 14px #0003;cursor:pointer';
+    bar.style.cssText='position:fixed;z-index:99999;right:8px;top:max(60px,calc(env(safe-area-inset-top) + 52px));background:#0f5c55;color:white;border:0;padding:8px 11px;border-radius:999px;font:700 11px system-ui;box-shadow:0 3px 14px #0003;cursor:pointer';
     let st=''; let mode=true;
     try{st=AndroidAudio.audioStatus(); mode=!!AndroidAudio.earphoneMode();}catch(e){}
     const paint=()=>{ bar.textContent=(mode?'🎧 이어폰 분리 ON · ':'🔊 일반 출력 · ')+st; bar.style.background=mode?'#0f5c55':'#334155'; };
