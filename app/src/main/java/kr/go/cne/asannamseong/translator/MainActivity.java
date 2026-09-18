@@ -425,27 +425,9 @@ public class MainActivity extends Activity {
                 stopPlayer();
                 tts.stop();
 
-                if ("speaker".equals(target)) {
-                    tts.setAudioAttributes(new AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                            .build());
-
-                    String directId = "direct_" + jsId;
-                    int result = tts.speak(
-                            text,
-                            TextToSpeech.QUEUE_FLUSH,
-                            new Bundle(),
-                            directId
-                    );
-
-                    if (result != TextToSpeech.SUCCESS) {
-                        js("window.__nativeTtsEvent && window.__nativeTtsEvent("
-                                + q(jsId) + ",'error','SPEAK_FAILED')");
-                    }
-                    return;
-                }
-
+                // Both routes use the proven synthesize-to-file pipeline.
+                // MediaPlayer then forces foreign-language audio to the phone speaker
+                // and Korean audio to the private earphone route when split mode is on.
                 String nativeId = "tts_" + UUID.randomUUID();
                 File f = new File(getCacheDir(), nativeId + ".wav");
                 PendingTts p = new PendingTts(jsId, f, target);
@@ -496,7 +478,7 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public String appVersion() { return "0.4-faster-speech"; }
+        public String appVersion() { return "0.9-speech-bridge-fix"; }
     }
 
     @Override
@@ -564,50 +546,75 @@ public class MainActivity extends Activity {
   }
   const utterances={}; let utterSeq=0;
   function safe(fn,arg){ try{ if(typeof fn==='function') fn(arg); }catch(e){ console.warn(e); } }
-if(window.AndroidAudio){
+
+  function NativeUtterance(text){
+    this.text=String(text||'');
+    this.lang='';
+    this.rate=1;
+    this.pitch=1;
+    this.volume=1;
+    this.onstart=null;
+    this.onend=null;
+    this.onerror=null;
+  }
+
   if(typeof window.SpeechSynthesisUtterance!=='function'){
-    window.SpeechSynthesisUtterance=function(text){
-      this.text=String(text||'');
-      this.lang='';
-      this.rate=1;
-      this.pitch=1;
-      this.volume=1;
-      this.onstart=null;
-      this.onend=null;
-      this.onerror=null;
-    };
-  }
-
-  if(!window.speechSynthesis){
-    window.speechSynthesis={};
-  }
-
-  window.speechSynthesis.speak=function(u){
-    const id='u'+Date.now()+'_'+(++utterSeq);
-    utterances[id]=u;
-    AndroidAudio.speak(
-      id,
-      String((u&&u.text)||''),
-      String((u&&u.lang)||'')
-    );
-  };
-
-  window.speechSynthesis.cancel=function(){
     try{
-      AndroidAudio.stopTts();
-    }catch(e){}
+      Object.defineProperty(window,'SpeechSynthesisUtterance',{
+        value:NativeUtterance,writable:true,configurable:true
+      });
+    }catch(e){
+      try{ window.SpeechSynthesisUtterance=NativeUtterance; }catch(ignore){}
+    }
+  }
 
-    Object.keys(utterances).forEach(id=>{
-      const u=utterances[id];
-      safe(u&&u.onerror,{error:'canceled'});
-      delete utterances[id];
-    });
-  };
+  let synth=null;
+  try{ synth=window.speechSynthesis; }catch(e){}
+  if(!synth){
+    synth={};
+    try{
+      Object.defineProperty(window,'speechSynthesis',{
+        value:synth,writable:true,configurable:true
+      });
+    }catch(e){
+      try{ window.speechSynthesis=synth; }catch(ignore){}
+    }
+  }
+  try{ synth=window.speechSynthesis||synth; }catch(e){}
 
-  window.speechSynthesis.pause=function(){};
-  window.speechSynthesis.resume=function(){};
-  window.speechSynthesis.getVoices=function(){return [];};
-}
+  if(synth){
+    synth.speak=function(u){
+      const id='u'+Date.now()+'_'+(++utterSeq);
+      utterances[id]=u;
+      if(!window.AndroidAudio || typeof AndroidAudio.speak!=='function'){
+        safe(u&&u.onerror,{type:'error',error:'ANDROID_AUDIO_NOT_READY'});
+        delete utterances[id];
+        return;
+      }
+      AndroidAudio.speak(
+        id,
+        String((u&&u.text)||''),
+        String((u&&u.lang)||'')
+      );
+    };
+
+    synth.cancel=function(){
+      try{
+        if(window.AndroidAudio && typeof AndroidAudio.stopTts==='function'){
+          AndroidAudio.stopTts();
+        }
+      }catch(e){}
+      Object.keys(utterances).forEach(id=>{
+        const u=utterances[id];
+        safe(u&&u.onerror,{error:'canceled'});
+        delete utterances[id];
+      });
+    };
+    synth.pause=function(){};
+    synth.resume=function(){};
+    synth.getVoices=function(){return [];};
+  }
+
   window.__nativeTtsEvent=function(id,type,detail){
     const u=utterances[id]; if(!u) return;
     if(type==='start') safe(u.onstart,{type:'start'});
@@ -646,12 +653,36 @@ if(window.AndroidAudio){
   function installStatus(){
     if(document.getElementById('nativeEarphoneStatus')) return;
     const bar=document.createElement('button'); bar.id='nativeEarphoneStatus'; bar.type='button';
-    bar.style.cssText='position:fixed;z-index:99999;right:8px;top:max(60px,calc(env(safe-area-inset-top) + 52px));background:#0f5c55;color:white;border:0;padding:8px 11px;border-radius:999px;font:700 11px system-ui;box-shadow:0 3px 14px #0003;cursor:pointer';
+    bar.style.cssText='position:fixed;z-index:99999;right:8px;top:8px;max-width:calc(100vw - 16px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:#0f5c55;color:white;border:0;padding:8px 11px;border-radius:999px;font:700 11px system-ui;box-shadow:0 3px 14px #0003;cursor:pointer';
     let st=''; let mode=true;
     try{st=AndroidAudio.audioStatus(); mode=!!AndroidAudio.earphoneMode();}catch(e){}
-    const paint=()=>{ bar.textContent=(mode?'🎧 이어폰 분리 ON · ':'🔊 일반 출력 · ')+st; bar.style.background=mode?'#0f5c55':'#334155'; };
-    bar.addEventListener('click',()=>{ mode=!mode; try{AndroidAudio.setEarphoneMode(mode);}catch(e){} paint(); });
-    paint(); document.body.appendChild(bar);
+
+    const place=()=>{
+      try{
+        const header=document.querySelector('.top');
+        const bottom=header ? header.getBoundingClientRect().bottom : 72;
+        bar.style.top=Math.max(8,Math.ceil(bottom+8))+'px';
+      }catch(e){
+        bar.style.top='88px';
+      }
+    };
+
+    const paint=()=>{
+      bar.textContent=(mode?'🎧 분리 ON · ':'🔊 일반 출력 · ')+st;
+      bar.style.background=mode?'#0f5c55':'#334155';
+    };
+
+    bar.addEventListener('click',()=>{
+      mode=!mode;
+      try{AndroidAudio.setEarphoneMode(mode);}catch(e){}
+      paint();
+    });
+
+    paint();
+    document.body.appendChild(bar);
+    place();
+    window.addEventListener('resize',place);
+    window.addEventListener('orientationchange',()=>setTimeout(place,120));
   }
   window.__nativeAudioStatus=function(st,mode){
     const b=document.getElementById('nativeEarphoneStatus'); if(!b) return;
