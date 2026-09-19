@@ -134,7 +134,7 @@ public class MainActivity extends Activity {
                 if (url.startsWith(APP_URL)) injectNativeBridgeJs();
             }
         });
-        webView.loadUrl(APP_URL);
+        webView.loadUrl(APP_URL + "?native=1.0-test1");
     }
 
     private void initTts() {
@@ -348,6 +348,8 @@ public class MainActivity extends Activity {
         intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang);
         intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
         intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
+        intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1800L);
+        intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 900L);
         try { speechRecognizer.startListening(intent); }
         catch (Exception e) {
             jsRecognition(id, "error", "audio-capture");
@@ -478,7 +480,7 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public String appVersion() { return "0.9-speech-bridge-fix"; }
+        public String appVersion() { return "1.0-test1-realtime"; }
     }
 
     @Override
@@ -510,40 +512,393 @@ public class MainActivity extends Activity {
   if(window.__namseongNativePatched) return;
   window.__namseongNativePatched=true;
 
-  // Shorten Android's post-recognition wait; retain final-result safeguards.
+  // Native app update refresh:
+  // clear only web resource/service-worker caches once per native build.
+  // localStorage (school name, favorites, custom phrases, settings) is preserved.
+  try{
+    const nativeVersion=(window.AndroidAudio && typeof AndroidAudio.appVersion==='function')
+      ? String(AndroidAudio.appVersion()||'') : '';
+    const markerKey='ans_native_cache_build';
+    const already=localStorage.getItem(markerKey)||'';
+    const urlNow=new URL(location.href);
+    if(nativeVersion && already!==nativeVersion && !urlNow.searchParams.has('native_refresh')){
+      const jobs=[];
+      if(navigator.serviceWorker && navigator.serviceWorker.getRegistrations){
+        jobs.push(
+          navigator.serviceWorker.getRegistrations()
+            .then(list=>Promise.all(list.map(reg=>reg.unregister())))
+        );
+      }
+      if(window.caches && caches.keys){
+        jobs.push(
+          caches.keys().then(keys=>Promise.all(
+            keys.filter(k=>k.startsWith('ans-translator-')).map(k=>caches.delete(k))
+          ))
+        );
+      }
+      Promise.allSettled(jobs).finally(()=>{
+        try{ localStorage.setItem(markerKey,nativeVersion); }catch(e){}
+        const u=new URL(location.href);
+        u.searchParams.set('native',nativeVersion);
+        u.searchParams.set('native_refresh','1');
+        location.replace(u.toString());
+      });
+      return;
+    }
+  }catch(e){
+    console.warn('native cache refresh',e);
+  }
+
+  // v1.0 realtime conversation engine.
+  // Keeps listening across Android recognition segment boundaries and only
+  // finalizes after real silence. The proven v0.9 TTS/output routing is untouched.
   if(window.SpeechSession && window.SpeechSession.VERSION==='6.7'){
-    window.SpeechSession.prototype.arm=function(){
-      if(this.closed || this.stopping) return;
+    const SS=window.SpeechSession;
+
+    const cleanText=value=>String(value||'').replace(/\s+/g,' ').trim();
+    const comparableToken=value=>cleanText(value).replace(/[.,!?…~"'“”‘’()[\]{}:;]+$/g,'').toLowerCase();
+
+    const joinSegments=(base,piece)=>{
+      base=cleanText(base); piece=cleanText(piece);
+      if(!base)return piece;
+      if(!piece)return base;
+      if(base===piece)return base;
+      if(piece.startsWith(base))return piece;
+
+      const a=base.split(/\s+/), b=piece.split(/\s+/);
+      const limit=Math.min(a.length,b.length,8);
+      for(let size=limit;size>=1;size--){
+        const left=a.slice(a.length-size).map(comparableToken);
+        const right=b.slice(0,size).map(comparableToken);
+        if(left.join('\u0001')!==right.join('\u0001'))continue;
+        const chars=left.join('').length;
+        const safeSingle=size===1 && a.length>1 && b.length>1 && chars>=2;
+        if(size>=2 || chars>=4 || safeSingle){
+          return cleanText(a.concat(b.slice(size)).join(' '));
+        }
+      }
+
+      // Handle a cumulative recognizer result without blindly deleting intentional repeats.
+      const compactBase=base.replace(/\s+/g,'');
+      const compactPiece=piece.replace(/\s+/g,'');
+      if(compactPiece.startsWith(compactBase) && compactBase.length>=4)return piece;
+      if(compactBase.endsWith(compactPiece) && compactPiece.length>=4)return base;
+
+      return cleanText(base+' '+piece);
+    };
+
+    SS.prototype.clearSilence=function(){
+      clearTimeout(this.silenceTimer);
+      this.silenceTimer=null;
+      this.deadline=0;
+    };
+
+    SS.prototype.__rtFullText=function(){
+      return joinSegments(this.__rtCommitted||'',this.__rtCurrent||'');
+    };
+
+    SS.prototype.__rtShow=function(){
+      const full=this.__rtFullText();
+      this.results=full?[{text:full,final:!this.__rtCurrent}]:[];
+      this.options.text(full);
+      if(full)this.__rtSchedulePrime(full);
+      return full;
+    };
+
+    SS.prototype.__rtSchedulePrime=function(full){
+      clearTimeout(this.__rtPrimeTimer);
+      if(this.closed || this.stopping || !full || full.length<4)return;
+      if((this.__rtPrimeCount||0)>=2)return;
+      const snapshot=cleanText(full);
+      this.__rtPrimeTimer=setTimeout(()=>{
+        if(this.closed || this.stopping)return;
+        const latest=cleanText(this.__rtFullText());
+        if(latest!==snapshot || this.__rtLastPrimed===snapshot)return;
+        this.__rtLastPrimed=snapshot;
+        this.__rtPrimeCount=(this.__rtPrimeCount||0)+1;
+        try{
+          if(typeof window.__primeRealtimeTranslation==='function'){
+            window.__primeRealtimeTranslation(snapshot,this.side);
+          }
+        }catch(e){ console.warn('realtime prime',e); }
+      },350);
+    };
+
+    SS.prototype.arm=function(){
+      if(this.closed || this.stopping)return;
       this.clearSilence();
-      this.deadline=Date.now()+1200;
+      this.deadline=Date.now()+1800;
       const tick=()=>{
+        if(this.closed || this.stopping)return;
         const remaining=this.deadline-Date.now();
         if(remaining<=0){ this.stopForFinal(); return; }
-        this.options.state('waiting',Math.ceil(remaining/1000));
-        this.silenceTimer=setTimeout(tick,Math.min(250,remaining));
+        this.options.state('waiting',Math.max(1,Math.ceil(remaining/1000)));
+        this.silenceTimer=setTimeout(tick,Math.min(150,remaining));
       };
       tick();
     };
-        window.SpeechSession.prototype.stopForFinal=function(){
-      if(this.closed || this.stopping) return;
+
+    SS.prototype.start=function(Ctor,lang){
+      this.__rtCtor=Ctor;
+      this.__rtLang=lang;
+      this.__rtCommitted='';
+      this.__rtCurrent='';
+      this.__rtPrimeCount=0;
+      this.__rtLastPrimed='';
+      this.__rtGeneration=0;
+      this.__rtStartedAt=Date.now();
+      this.closed=false;
+      this.ended=false;
+      this.stopping=false;
+      this.results=[];
+
+      const session=this;
+
+      this.__rtMaxTimer=setTimeout(()=>{
+        if(session.closed)return;
+        if(session.__rtFullText())session.stopForFinal();
+        else{
+          session.cancel();
+          session.options.error('no-speech');
+        }
+      },30000);
+
+      this.__rtLaunch=function(){
+        if(session.closed || session.stopping)return;
+        if(Date.now()-session.__rtStartedAt>=30000){
+          session.stopForFinal();
+          return;
+        }
+
+        const generation=++session.__rtGeneration;
+        const r=session.recognition=new Ctor();
+        r.lang=lang;
+        r.continuous=false;
+        r.interimResults=true;
+        r.maxAlternatives=1;
+
+        const current=()=>generation===session.__rtGeneration && !session.closed;
+
+        r.onstart=()=>{
+          if(!current())return;
+          session.options.state('listening');
+        };
+
+        r.onspeechstart=()=>{
+          if(!current() || session.stopping)return;
+          session.options.state('listening');
+        };
+
+        r.onspeechend=()=>{
+          if(!current() || session.stopping)return;
+          if(session.__rtFullText())session.arm();
+        };
+
+        r.onresult=event=>{
+          if(!current())return;
+          const rows=event.results||[];
+          let latest='';
+          let isFinal=false;
+          for(let i=0;i<rows.length;i++){
+            const row=rows[i];
+            const text=cleanText(row?.[0]?.transcript||'');
+            if(!text)continue;
+            latest=text;
+            isFinal=!!row.isFinal;
+          }
+          if(!latest)return;
+
+          session.__rtCurrent=latest;
+          session.__rtShow();
+          session.arm();
+
+          if(isFinal){
+            session.__rtCommitted=joinSegments(session.__rtCommitted,latest);
+            session.__rtCurrent='';
+            session.__rtShow();
+            session.arm();
+          }
+        };
+
+        r.onerror=event=>{
+          if(!current())return;
+          const error=String(event?.error||'unknown');
+          if(session.stopping){
+            session.finish();
+            return;
+          }
+
+          // A restarted recognizer may time out while we are waiting to see
+          // whether the speaker continues. If we already have text, finalize it.
+          if((error==='no-speech' || error==='aborted') && session.__rtFullText()){
+            session.stopForFinal();
+            return;
+          }
+
+          session.cancel();
+          session.options.error(error);
+        };
+
+        r.onend=()=>{
+          if(!current())return;
+          session.ended=true;
+
+          // Preserve the best partial result if Android ended the segment before
+          // delivering an explicit final result.
+          if(session.__rtCurrent){
+            session.__rtCommitted=joinSegments(session.__rtCommitted,session.__rtCurrent);
+            session.__rtCurrent='';
+            session.__rtShow();
+          }
+
+          if(session.stopping){
+            session.finish();
+            return;
+          }
+
+          if(!session.__rtFullText()){
+            session.cancel();
+            session.options.error('no-speech');
+            return;
+          }
+
+          session.ended=false;
+          clearTimeout(session.__rtRestartTimer);
+          session.__rtRestartTimer=setTimeout(()=>{
+            if(!session.closed && !session.stopping)session.__rtLaunch();
+          },70);
+        };
+
+        try{
+          r.start();
+        }catch(error){
+          session.cancel();
+          session.options.error(error?.name||'audio-capture');
+        }
+      };
+
+      this.__rtLaunch();
+    };
+
+    SS.prototype.stopForFinal=function(){
+      if(this.closed || this.stopping)return;
       this.stopping=true;
       this.clearSilence();
+      clearTimeout(this.__rtRestartTimer);
+      clearTimeout(this.__rtPrimeTimer);
       this.options.state('finalizing');
-      if(this.ended){ this.finish(); return; }
-      this.finalTimer=setTimeout(()=>this.finish(),500);
-      try{ this.recognition.stop(); }catch(e){ this.finish(); }
+
+      if(this.__rtCurrent){
+        this.__rtCommitted=joinSegments(this.__rtCommitted,this.__rtCurrent);
+        this.__rtCurrent='';
+        this.__rtShow();
+      }
+
+      this.finalTimer=setTimeout(()=>this.finish(),650);
+      try{
+        if(this.recognition)this.recognition.stop();
+        else this.finish();
+      }catch(e){
+        this.finish();
+      }
     };
+
+    SS.prototype.finish=function(){
+      if(this.closed)return;
+      const text=cleanText(this.__rtFullText());
+      const result=text?[{text,final:true}]:[];
+      this.cancel();
+
+      if(!text){
+        this.options.error('no-speech');
+        return;
+      }
+      if(SS.needsReview(result))this.options.review(text,'repetition');
+      else this.options.done(text);
+    };
+
+    SS.prototype.cancel=function(){
+      if(this.closed)return;
+      this.closed=true;
+      this.clearSilence();
+      clearTimeout(this.finalTimer);
+      clearTimeout(this.__rtRestartTimer);
+      clearTimeout(this.__rtPrimeTimer);
+      clearTimeout(this.__rtMaxTimer);
+      this.__rtGeneration=(this.__rtGeneration||0)+1;
+      if(this.recognition){
+        this.recognition.onresult=null;
+        this.recognition.onend=null;
+        this.recognition.onerror=null;
+        this.recognition.onstart=null;
+        this.recognition.onspeechstart=null;
+        this.recognition.onspeechend=null;
+        try{ this.recognition.abort(); }catch(e){}
+      }
+      this.recognition=null;
+    };
+
+    // Update the existing helper text without touching the page design.
     const hint=document.getElementById('workspaceHint');
     if(hint){
       const updateHint=()=>{
-        const text=hint.textContent;
-        const updated=text.replace('3초 후 자동 번역','1.2초 후 자동 번역');
-        if(text!==updated) hint.textContent=updated;
+        const text=hint.textContent||'';
+        const updated=text
+          .replace('3초 후 자동 번역','실시간 연결 · 약 1.8초 후 번역')
+          .replace('1.2초 후 자동 번역','실시간 연결 · 약 1.8초 후 번역');
+        if(text!==updated)hint.textContent=updated;
       };
       new MutationObserver(updateHint).observe(hint,{childList:true,subtree:true,characterData:true});
       updateHint();
     }
   }
+
+  // Speculative translation cache:
+  // after a transcript stays unchanged for 350 ms, prepare at most two
+  // translations during the turn. Final translation reuses an exact cache hit.
+  try{
+    if(!window.__namseongRealtimeTranslateWrapped && typeof translateText==='function'){
+      window.__namseongRealtimeTranslateWrapped=true;
+      const originalTranslate=translateText;
+      const rtCache=new Map();
+
+      const cacheKey=(text,sourceKey,targetKey)=>
+        [String(sourceKey||''),String(targetKey||''),cleanText(text)].join('\u0002');
+
+      const cachedTranslate=async(text,sourceKey,targetKey)=>{
+        const key=cacheKey(text,sourceKey,targetKey);
+        const now=Date.now();
+        const found=rtCache.get(key);
+        if(found && now-found.time<8000)return found.promise;
+
+        const promise=Promise.resolve(originalTranslate(text,sourceKey,targetKey))
+          .catch(error=>{ rtCache.delete(key); throw error; });
+
+        rtCache.set(key,{time:now,promise});
+        if(rtCache.size>12){
+          const oldest=[...rtCache.entries()].sort((a,b)=>a[1].time-b[1].time)[0];
+          if(oldest)rtCache.delete(oldest[0]);
+        }
+        return promise;
+      };
+
+      try{ translateText=cachedTranslate; }catch(e){}
+      try{ window.translateText=cachedTranslate; }catch(e){}
+
+      window.__primeRealtimeTranslation=(text,side)=>{
+        try{
+          if(!text || typeof currentLang==='undefined')return;
+          const staff=side==='staff';
+          const sourceKey=staff?'ko':currentLang;
+          const targetKey=staff?currentLang:'ko';
+          cachedTranslate(text,sourceKey,targetKey).catch(()=>{});
+        }catch(e){}
+      };
+    }
+  }catch(e){
+    console.warn('realtime translation cache',e);
+  }
+
   const utterances={}; let utterSeq=0;
   function safe(fn,arg){ try{ if(typeof fn==='function') fn(arg); }catch(e){ console.warn(e); } }
 
