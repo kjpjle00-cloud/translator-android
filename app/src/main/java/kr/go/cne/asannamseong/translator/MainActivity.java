@@ -134,7 +134,7 @@ public class MainActivity extends Activity {
                 if (url.startsWith(APP_URL)) injectNativeBridgeJs();
             }
         });
-        webView.loadUrl(APP_URL + "?native=1.0-test2b1r");
+        webView.loadUrl(APP_URL + "?native=1.0-test2b3");
     }
 
     private void initTts() {
@@ -618,7 +618,7 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public String appVersion() { return "1.0-test2b1r-rollback"; }
+        public String appVersion() { return "1.0-test2b3-clean-auto"; }
     }
 
     @Override
@@ -780,7 +780,7 @@ public class MainActivity extends Activity {
             window.__primeRealtimeTranslation(snapshot,this.side);
           }
         }catch(e){ console.warn('realtime prime',e); }
-      },350);
+      },250);
     };
 
     SS.prototype.arm=function(){
@@ -1155,6 +1155,83 @@ public class MainActivity extends Activity {
   window.getRecognitionContext=function(){
     return normalizeRecognitionContext(window.__recognitionContext);
   };
+
+
+  // TEST2B3 CLEAN:
+  // Keep the proven TEST2B1 translation/server path untouched.
+  // Only improve automatic-conversation turn timing and recovery.
+
+  // Faster handoff after TTS: existing web app asks for 850 ms.
+  // Native TTS already reports the actual playback end, so 320 ms is enough.
+  try{
+    if(typeof scheduleAutoTurn==='function' && !window.__test2b3FastTurn){
+      window.__test2b3FastTurn=true;
+      const originalScheduleAutoTurn=scheduleAutoTurn;
+      scheduleAutoTurn=function(side,delay=320){
+        const d=Number(delay);
+        return originalScheduleAutoTurn(
+          side,
+          Number.isFinite(d)?Math.max(220,Math.min(d,320)):320
+        );
+      };
+    }
+  }catch(e){
+    console.warn('TEST2B3 fast turn',e);
+  }
+
+  // Keep auto-conversation alive for recoverable recognition problems.
+  // Permission / unsupported-language problems still pause normally.
+  try{
+    if(typeof pauseAutoConversation==='function' && !window.__test2b3AutoRecovery){
+      window.__test2b3AutoRecovery=true;
+      const originalPauseAutoConversation=pauseAutoConversation;
+      pauseAutoConversation=function(message='자동대화를 일시정지했습니다.'){
+        try{
+          const msg=String(message||'');
+          const active=(typeof conversationMode!=='undefined' &&
+                        conversationMode==='auto' &&
+                        typeof autoConversationActive!=='undefined' &&
+                        autoConversationActive);
+          const fatal=/권한|차단|지원하지|사용할 수 없|not-allowed|language-not-supported/i.test(msg);
+          const recoverable=/음성인식 오류|인식 문장 확인|번역 오류/.test(msg);
+
+          if(active && recoverable && !fatal){
+            if(typeof clearAutoConversationTimer==='function')clearAutoConversationTimer();
+
+            const sameSide=(typeof autoConversationTurn!=='undefined' &&
+                            autoConversationTurn==='visitor')?'visitor':'staff';
+
+            const b=document.getElementById('autoConversationBtn');
+            if(b){
+              b.dataset.paused='false';
+              b.classList.add('active');
+              b.textContent='자동대화 종료';
+            }
+
+            const dock=document.getElementById('dockStatus');
+            if(dock)dock.textContent='잠깐 놓쳤습니다 · 같은 차례를 다시 듣습니다';
+
+            setTimeout(()=>{
+              try{
+                if(conversationMode==='auto' && autoConversationActive &&
+                   typeof beginSpeech==='function'){
+                  beginSpeech(sameSide);
+                }
+              }catch(err){
+                console.warn('TEST2B3 auto retry',err);
+              }
+            },420);
+            return;
+          }
+        }catch(e){
+          console.warn('TEST2B3 recovery decision',e);
+        }
+        return originalPauseAutoConversation(message);
+      };
+    }
+  }catch(e){
+    console.warn('TEST2B3 auto recovery install',e);
+  }
 
   // TEST2B: 업무용 / 여행용 / 일상용 상황 선택 + 자동대화 중심 UI.
   const SCENARIO_MODE_KEY='ans_usage_mode_v2';
