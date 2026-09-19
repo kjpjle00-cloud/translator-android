@@ -134,7 +134,7 @@ public class MainActivity extends Activity {
                 if (url.startsWith(APP_URL)) injectNativeBridgeJs();
             }
         });
-        webView.loadUrl(APP_URL + "?native=1.0-test2b3");
+        webView.loadUrl(APP_URL + "?native=1.0-test2b4");
     }
 
     private void initTts() {
@@ -373,9 +373,9 @@ public class MainActivity extends Activity {
         // TEST2A: ask Android for multiple hypotheses instead of accepting only one.
         intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5);
 
-        // Keep the proven TEST1C turn timing.
-        intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1800L);
-        intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 900L);
+        // TEST2B4: keep listening through natural pauses and finalize after 2 seconds of silence.
+        intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2000L);
+        intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 2000L);
 
         // Android 13+ can bias recognition toward words that fit the current situation.
         // Unsupported recognizers are allowed to ignore these hints.
@@ -618,7 +618,7 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public String appVersion() { return "1.0-test2b3-clean-auto"; }
+        public String appVersion() { return "1.0-test2b4-2s-fullturn"; }
     }
 
     @Override
@@ -786,7 +786,7 @@ public class MainActivity extends Activity {
     SS.prototype.arm=function(){
       if(this.closed || this.stopping)return;
       this.clearSilence();
-      this.deadline=Date.now()+1800;
+      this.deadline=Date.now()+2000;
       const tick=()=>{
         if(this.closed || this.stopping)return;
         const remaining=this.deadline-Date.now();
@@ -845,6 +845,8 @@ public class MainActivity extends Activity {
 
         r.onspeechstart=()=>{
           if(!current() || session.stopping)return;
+          // Speech resumed: keep the same turn and cancel pending finalization.
+          session.clearSilence();
           session.options.state('listening');
         };
 
@@ -925,7 +927,7 @@ public class MainActivity extends Activity {
           clearTimeout(session.__rtRestartTimer);
           session.__rtRestartTimer=setTimeout(()=>{
             if(!session.closed && !session.stopping)session.__rtLaunch();
-          },70);
+          },20);
         };
 
         try{
@@ -953,7 +955,7 @@ public class MainActivity extends Activity {
         this.__rtShow();
       }
 
-      this.finalTimer=setTimeout(()=>this.finish(),650);
+      this.finalTimer=setTimeout(()=>this.finish(),250);
       try{
         if(this.recognition)this.recognition.stop();
         else this.finish();
@@ -1003,8 +1005,9 @@ public class MainActivity extends Activity {
       const updateHint=()=>{
         const text=hint.textContent||'';
         const updated=text
-          .replace('3초 후 자동 번역','실시간 연결 · 약 1.8초 후 번역')
-          .replace('1.2초 후 자동 번역','실시간 연결 · 약 1.8초 후 번역');
+          .replace('3초 후 자동 번역','끝까지 듣고 · 2초 무음 후 바로 번역')
+          .replace('1.2초 후 자동 번역','끝까지 듣고 · 2초 무음 후 바로 번역')
+          .replace('실시간 연결 · 약 1.8초 후 번역','끝까지 듣고 · 2초 무음 후 바로 번역');
         if(text!==updated)hint.textContent=updated;
       };
       new MutationObserver(updateHint).observe(hint,{childList:true,subtree:true,characterData:true});
@@ -1013,7 +1016,7 @@ public class MainActivity extends Activity {
   }
 
   // Speculative translation cache:
-  // after a transcript stays unchanged for 350 ms, prepare at most two
+  // after a transcript stays unchanged for 250 ms, prepare at most two
   // translations during the turn. Final translation reuses an exact cache hit.
   try{
     if(!window.__namseongRealtimeTranslateWrapped && typeof translateText==='function'){
