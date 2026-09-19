@@ -134,7 +134,7 @@ public class MainActivity extends Activity {
                 if (url.startsWith(APP_URL)) injectNativeBridgeJs();
             }
         });
-        webView.loadUrl(APP_URL + "?native=1.0-test2b");
+        webView.loadUrl(APP_URL + "?native=1.0-test2b1");
     }
 
     private void initTts() {
@@ -618,7 +618,7 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public String appVersion() { return "1.0-test2b-scenario-auto-ui"; }
+        public String appVersion() { return "1.0-test2b1-server-recovery"; }
     }
 
     @Override
@@ -649,6 +649,27 @@ public class MainActivity extends Activity {
 (function(){
   if(window.__namseongNativePatched) return;
   window.__namseongNativePatched=true;
+
+  // TEST2B1 connection recovery.
+  // The translation server itself is confirmed healthy. A stale but valid-looking
+  // Apps Script URL saved in localStorage can override the built-in working URL.
+  // Pin this test build to the confirmed v6.0 server, then refresh the page badge.
+  try{
+    const nativeServerUrl='https://script.google.com/macros/s/AKfycbzXS4sGTdMz0ZXCJx0fEYAs7xLcZi-iT-dYEERbi4it2N5j4ZLR6JAIU0_dwdM9ZeKT/exec';
+    const savedServer=(localStorage.getItem('ans_gas_url')||'').trim();
+    if(savedServer!==nativeServerUrl){
+      localStorage.setItem('ans_gas_url',nativeServerUrl);
+    }
+    setTimeout(()=>{
+      try{
+        if(typeof syncServerInputs==='function')syncServerInputs();
+        if(typeof testServerEverywhere==='function')testServerEverywhere();
+        if(typeof checkTranslatorStatus==='function')checkTranslatorStatus();
+      }catch(e){console.warn('native server recovery retry',e);}
+    },300);
+  }catch(e){
+    console.warn('native server recovery',e);
+  }
 
   // Native app update refresh:
   // clear only web resource/service-worker caches once per native build.
