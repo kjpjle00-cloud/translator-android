@@ -480,7 +480,7 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public String appVersion() { return "1.0-test1-realtime"; }
+        public String appVersion() { return "1.0-test1b-realtime"; }
     }
 
     @Override
@@ -555,8 +555,8 @@ public class MainActivity extends Activity {
   if(window.SpeechSession && window.SpeechSession.VERSION==='6.7'){
     const SS=window.SpeechSession;
 
-    const cleanText=value=>String(value||'').replace(/\s+/g,' ').trim();
-    const comparableToken=value=>cleanText(value).replace(/[.,!?…~"'“”‘’()[\]{}:;]+$/g,'').toLowerCase();
+    const cleanText=value=>String(value||'').replace(/\\s+/g,' ').trim();
+    const comparableToken=value=>cleanText(value).replace(/[.,!?…~"'“”‘’(){}:;]+$/g,'').toLowerCase();
 
     const joinSegments=(base,piece)=>{
       base=cleanText(base); piece=cleanText(piece);
@@ -565,12 +565,12 @@ public class MainActivity extends Activity {
       if(base===piece)return base;
       if(piece.startsWith(base))return piece;
 
-      const a=base.split(/\s+/), b=piece.split(/\s+/);
+      const a=base.split(/\\s+/), b=piece.split(/\\s+/);
       const limit=Math.min(a.length,b.length,8);
       for(let size=limit;size>=1;size--){
         const left=a.slice(a.length-size).map(comparableToken);
         const right=b.slice(0,size).map(comparableToken);
-        if(left.join('\u0001')!==right.join('\u0001'))continue;
+        if(left.join('¦')!==right.join('¦'))continue;
         const chars=left.join('').length;
         const safeSingle=size===1 && a.length>1 && b.length>1 && chars>=2;
         if(size>=2 || chars>=4 || safeSingle){
@@ -579,8 +579,8 @@ public class MainActivity extends Activity {
       }
 
       // Handle a cumulative recognizer result without blindly deleting intentional repeats.
-      const compactBase=base.replace(/\s+/g,'');
-      const compactPiece=piece.replace(/\s+/g,'');
+      const compactBase=base.replace(/\\s+/g,'');
+      const compactPiece=piece.replace(/\\s+/g,'');
       if(compactPiece.startsWith(compactBase) && compactBase.length>=4)return piece;
       if(compactBase.endsWith(compactPiece) && compactPiece.length>=4)return base;
 
@@ -863,7 +863,7 @@ public class MainActivity extends Activity {
       const rtCache=new Map();
 
       const cacheKey=(text,sourceKey,targetKey)=>
-        [String(sourceKey||''),String(targetKey||''),cleanText(text)].join('\u0002');
+        [String(sourceKey||''),String(targetKey||''),cleanText(text)].join('§');
 
       const cachedTranslate=async(text,sourceKey,targetKey)=>{
         const key=cacheKey(text,sourceKey,targetKey);
