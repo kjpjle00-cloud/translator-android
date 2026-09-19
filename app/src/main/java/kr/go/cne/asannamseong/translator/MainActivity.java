@@ -480,7 +480,7 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public String appVersion() { return "1.0-test1b-realtime"; }
+        public String appVersion() { return "1.0-test1c-realtime"; }
     }
 
     @Override
@@ -863,7 +863,7 @@ public class MainActivity extends Activity {
       const rtCache=new Map();
 
       const cacheKey=(text,sourceKey,targetKey)=>
-        [String(sourceKey||''),String(targetKey||''),cleanText(text)].join('§');
+        [String(sourceKey||''),String(targetKey||''),String(text||'').trim()].join('§');
 
       const cachedTranslate=async(text,sourceKey,targetKey)=>{
         const key=cacheKey(text,sourceKey,targetKey);
