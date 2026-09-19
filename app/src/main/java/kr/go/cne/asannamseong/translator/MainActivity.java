@@ -134,7 +134,7 @@ public class MainActivity extends Activity {
                 if (url.startsWith(APP_URL)) injectNativeBridgeJs();
             }
         });
-        webView.loadUrl(APP_URL + "?native=1.0-test1");
+        webView.loadUrl(APP_URL + "?native=1.0-test2b");
     }
 
     private void initTts() {
@@ -618,7 +618,7 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public String appVersion() { return "1.0-test2a-smart-recognition"; }
+        public String appVersion() { return "1.0-test2b-scenario-auto-ui"; }
     }
 
     @Override
@@ -1134,6 +1134,229 @@ public class MainActivity extends Activity {
   window.getRecognitionContext=function(){
     return normalizeRecognitionContext(window.__recognitionContext);
   };
+
+  // TEST2B: 업무용 / 여행용 / 일상용 상황 선택 + 자동대화 중심 UI.
+  const SCENARIO_MODE_KEY='ans_usage_mode_v2';
+  const SCENARIO_DETAIL_KEY='ans_usage_detail_v2';
+  const SCENARIO_DEFS={
+    work:{
+      label:'업무용',icon:'💼',
+      details:['학교·교육','행정·민원','회사·사무','병원·의료','계약·서류']
+    },
+    travel:{
+      label:'여행용',icon:'✈️',
+      details:['공항','출입국','숙소','식당','교통','관광','쇼핑','긴급상황']
+    },
+    daily:{
+      label:'일상용',icon:'🏠',
+      details:['인사·소개','가족·친구','약속·시간','음식·생활','쇼핑','길찾기','자유대화']
+    }
+  };
+
+  function safeScenarioMode(value){
+    const v=String(value||'work').toLowerCase();
+    return SCENARIO_DEFS[v]?v:'work';
+  }
+
+  function installScenarioStyles(){
+    if(document.getElementById('nativeScenarioUiStyle'))return;
+    const style=document.createElement('style');
+    style.id='nativeScenarioUiStyle';
+    style.textContent=`
+      #howInstallBtn,#installBtn{display:none!important}
+      #nativeScenarioPanel{margin:12px auto 10px;max-width:1180px;padding:0 14px;box-sizing:border-box}
+      .native-scenario-card{background:#fff;border:1px solid #dce8ee;border-radius:20px;padding:14px;box-shadow:0 8px 28px rgba(21,54,79,.07)}
+      .native-mode-tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+      .native-mode-btn{border:1px solid #d9e5eb;background:#f8fbfc;color:#21405a;border-radius:15px;padding:13px 8px;font-size:16px;font-weight:800;min-height:50px}
+      .native-mode-btn.active{background:linear-gradient(135deg,#0c9a9a,#1687a7);color:#fff;border-color:transparent;box-shadow:0 6px 16px rgba(13,145,157,.24)}
+      .native-detail-row{display:flex;gap:8px;overflow-x:auto;padding:12px 1px 2px;scrollbar-width:none}
+      .native-detail-row::-webkit-scrollbar{display:none}
+      .native-detail-btn{flex:0 0 auto;border:1px solid #d9e5eb;background:#fff;color:#365168;border-radius:999px;padding:9px 13px;font-size:14px;font-weight:700}
+      .native-detail-btn.active{background:#e8f8f6;color:#087f7d;border-color:#8fd4ce}
+      #nativeAutoPanel{margin:10px auto 16px;max-width:1180px;padding:0 14px;box-sizing:border-box}
+      .native-auto-card{background:linear-gradient(180deg,#f9feff,#f3fbfb);border:1px solid #d9eceb;border-radius:22px;padding:16px;box-shadow:0 8px 26px rgba(14,105,111,.07)}
+      .native-auto-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+      .native-auto-title{font-size:20px;font-weight:900;color:#173d57}
+      .native-auto-badge{font-size:13px;font-weight:800;color:#147d50;background:#e8f8ef;border-radius:999px;padding:7px 10px;white-space:nowrap}
+      .native-auto-status{min-height:24px;color:#486275;font-size:14px;font-weight:700;margin:4px 0 12px}
+      .native-auto-main{width:100%;border:0;border-radius:16px;padding:16px 14px;background:linear-gradient(135deg,#0c9a9a,#1486a7);color:#fff;font-size:18px;font-weight:900;box-shadow:0 7px 18px rgba(13,145,157,.22)}
+      .native-auto-main.active{background:linear-gradient(135deg,#0f6f76,#0b617e)}
+      .native-manual-row{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:10px}
+      .native-manual-btn{border:1px solid #cfdee6;background:#fff;color:#244b66;border-radius:14px;padding:12px 8px;font-size:15px;font-weight:800}
+      .native-auto-help{font-size:12px;color:#728694;text-align:center;margin-top:9px}
+      body[data-page="conversation"] .speech-dock{display:none!important}
+      @media(max-width:620px){
+        #nativeScenarioPanel,#nativeAutoPanel{padding:0 8px}
+        .native-scenario-card,.native-auto-card{border-radius:16px;padding:11px}
+        .native-mode-btn{font-size:15px;padding:11px 5px}
+        .native-detail-btn{font-size:13px;padding:8px 11px}
+        .native-auto-title{font-size:18px}
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function installScenarioUI(){
+    if(document.getElementById('nativeScenarioPanel'))return;
+    installScenarioStyles();
+
+    const header=document.querySelector('.brand');
+    if(header){
+      const school=header.querySelector('.school-name');
+      const title=header.querySelector('h1');
+      if(school && !school.dataset.nativeOriginal){
+        school.dataset.nativeOriginal=school.textContent||'';
+        const original=school.dataset.nativeOriginal.trim();
+        school.textContent=(original?original+' · ':'')+'업무·여행·일상';
+      }
+      if(title)title.textContent='실시간 통역';
+    }
+
+    const languageBar=document.querySelector('.languagebar');
+    if(!languageBar)return;
+
+    const panel=document.createElement('section');
+    panel.id='nativeScenarioPanel';
+    panel.innerHTML=`
+      <div class="native-scenario-card">
+        <div class="native-mode-tabs" role="group" aria-label="사용 상황">
+          <button class="native-mode-btn" data-mode="work" type="button">💼 업무용</button>
+          <button class="native-mode-btn" data-mode="travel" type="button">✈️ 여행용</button>
+          <button class="native-mode-btn" data-mode="daily" type="button">🏠 일상용</button>
+        </div>
+        <div id="nativeDetailRow" class="native-detail-row" aria-label="세부 상황"></div>
+      </div>
+    `;
+    languageBar.parentNode.insertBefore(panel,languageBar);
+
+    const autoPanel=document.createElement('section');
+    autoPanel.id='nativeAutoPanel';
+    autoPanel.innerHTML=`
+      <div class="native-auto-card">
+        <div class="native-auto-head">
+          <div class="native-auto-title">🤖 자동대화</div>
+          <div class="native-auto-badge">● 자동 인식 ON</div>
+        </div>
+        <div id="nativeAutoStatus" class="native-auto-status">언어와 상황을 선택한 뒤 자동대화를 시작하세요.</div>
+        <button id="nativeAutoMainBtn" class="native-auto-main" type="button">▶ 자동대화 시작</button>
+        <div class="native-manual-row">
+          <button id="nativeManualStaffBtn" class="native-manual-btn" type="button">🎤 내가 말하기</button>
+          <button id="nativeManualVisitorBtn" class="native-manual-btn" type="button">🎧 수동 듣기</button>
+        </div>
+        <div class="native-auto-help">자동대화에서는 번역 음성이 끝나면 상대방 차례를 자동으로 듣습니다.</div>
+      </div>
+    `;
+    const workspaceHeading=document.querySelector('.workspace-heading');
+    if(workspaceHeading)workspaceHeading.parentNode.insertBefore(autoPanel,workspaceHeading);
+    else languageBar.insertAdjacentElement('afterend',autoPanel);
+
+    let mode=safeScenarioMode(localStorage.getItem(SCENARIO_MODE_KEY)||window.getRecognitionContext()||'work');
+    let detail=String(localStorage.getItem(SCENARIO_DETAIL_KEY)||'');
+
+    const detailRow=panel.querySelector('#nativeDetailRow');
+    const autoMain=autoPanel.querySelector('#nativeAutoMainBtn');
+    const autoStatus=autoPanel.querySelector('#nativeAutoStatus');
+
+    function autoRunning(){
+      const b=document.getElementById('autoConversationBtn');
+      return !!(b && (b.classList.contains('active') || /종료/.test(b.textContent||'')));
+    }
+
+    function syncAutoButton(){
+      const running=autoRunning();
+      autoMain.classList.toggle('active',running);
+      autoMain.textContent=running?'■ 자동대화 종료':'▶ 자동대화 시작';
+    }
+
+    function syncStatus(){
+      const dock=document.getElementById('dockStatus');
+      const text=(dock?.textContent||'').trim();
+      autoStatus.textContent=text || (autoRunning()?'자동대화 진행 중':'언어와 상황을 선택한 뒤 자동대화를 시작하세요.');
+    }
+
+    function stopAutoBeforeContextChange(){
+      const b=document.getElementById('autoConversationBtn');
+      if(autoRunning() && b)b.click();
+    }
+
+    function renderDetails(){
+      const def=SCENARIO_DEFS[mode];
+      if(!def.details.includes(detail))detail=def.details[0];
+      detailRow.replaceChildren();
+      def.details.forEach(name=>{
+        const b=document.createElement('button');
+        b.type='button';
+        b.className='native-detail-btn'+(name===detail?' active':'');
+        b.textContent=name;
+        b.onclick=()=>{
+          if(detail===name)return;
+          stopAutoBeforeContextChange();
+          detail=name;
+          try{localStorage.setItem(SCENARIO_DETAIL_KEY,detail);}catch(e){}
+          renderDetails();
+          syncStatus();
+        };
+        detailRow.appendChild(b);
+      });
+    }
+
+    function setMode(next){
+      next=safeScenarioMode(next);
+      if(mode!==next)stopAutoBeforeContextChange();
+      mode=next;
+      try{localStorage.setItem(SCENARIO_MODE_KEY,mode);}catch(e){}
+      try{window.setRecognitionContext(mode);}catch(e){}
+      panel.querySelectorAll('.native-mode-btn').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));
+      detail='';
+      renderDetails();
+      syncStatus();
+    }
+
+    panel.querySelectorAll('.native-mode-btn').forEach(b=>b.onclick=()=>setMode(b.dataset.mode));
+
+    autoMain.onclick=()=>{
+      try{window.setRecognitionContext(mode);}catch(e){}
+      const modeBtn=document.getElementById('autoModeBtn');
+      const autoBtn=document.getElementById('autoConversationBtn');
+      if(!autoBtn)return;
+      if(!autoRunning() && modeBtn && !modeBtn.classList.contains('active'))modeBtn.click();
+      autoBtn.click();
+      setTimeout(()=>{syncAutoButton();syncStatus();},30);
+    };
+
+    autoPanel.querySelector('#nativeManualStaffBtn').onclick=()=>{
+      const manual=document.getElementById('manualModeBtn');
+      const b=document.getElementById('staffMicBtn');
+      if(autoRunning())document.getElementById('autoConversationBtn')?.click();
+      if(manual && !manual.classList.contains('active'))manual.click();
+      try{window.setRecognitionContext(mode);}catch(e){}
+      b?.click();
+    };
+
+    autoPanel.querySelector('#nativeManualVisitorBtn').onclick=()=>{
+      const manual=document.getElementById('manualModeBtn');
+      const b=document.getElementById('micBtn');
+      if(autoRunning())document.getElementById('autoConversationBtn')?.click();
+      if(manual && !manual.classList.contains('active'))manual.click();
+      try{window.setRecognitionContext(mode);}catch(e){}
+      b?.click();
+    };
+
+    const originalAuto=document.getElementById('autoConversationBtn');
+    if(originalAuto){
+      new MutationObserver(()=>{syncAutoButton();syncStatus();}).observe(originalAuto,{attributes:true,childList:true,subtree:true});
+    }
+    const dock=document.getElementById('dockStatus');
+    if(dock){
+      new MutationObserver(syncStatus).observe(dock,{childList:true,subtree:true,characterData:true});
+    }
+
+    setMode(mode);
+    syncAutoButton();
+    syncStatus();
+  }
+
+  setTimeout(installScenarioUI,0);
 
   function NativeRecognition(){
     this.lang='ko-KR'; this.continuous=true; this.interimResults=false; this.maxAlternatives=5;
