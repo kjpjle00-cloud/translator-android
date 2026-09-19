@@ -308,59 +308,192 @@ public class MainActivity extends Activity {
     }
 
     private void startNativeRecognition(String id, String lang) {
+        startNativeRecognition(id, lang, "auto");
+    }
+
+    private void startNativeRecognition(String id, String lang, String context) {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestNeededPermissions();
             jsRecognition(id, "error", "not-allowed");
             jsRecognition(id, "end", "");
             return;
         }
+
+        final String recognitionContext = normalizeRecognitionContext(context);
         stopNativeRecognition(true);
         activeRecognitionId = id;
         recognitionEnded = false;
         speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
         speechRecognizer.setRecognitionListener(new RecognitionListener() {
             private boolean begun = false;
-            @Override public void onReadyForSpeech(Bundle params) { jsRecognition(id, "start", ""); }
-            @Override public void onBeginningOfSpeech() { begun = true; jsRecognition(id, "speechstart", ""); }
+
+            @Override public void onReadyForSpeech(Bundle params) {
+                jsRecognition(id, "start", "");
+            }
+
+            @Override public void onBeginningOfSpeech() {
+                begun = true;
+                jsRecognition(id, "speechstart", "");
+            }
+
             @Override public void onRmsChanged(float rmsdB) { }
             @Override public void onBufferReceived(byte[] buffer) { }
-            @Override public void onEndOfSpeech() { if (begun) jsRecognition(id, "speechend", ""); }
+
+            @Override public void onEndOfSpeech() {
+                if (begun) jsRecognition(id, "speechend", "");
+            }
+
             @Override public void onError(int error) {
                 if (!isCurrentRecognition(id)) return;
                 jsRecognition(id, "error", mapRecognitionError(error));
                 finishRecognition(id);
             }
+
             @Override public void onResults(Bundle results) {
                 if (!isCurrentRecognition(id)) return;
-                String text = firstResult(results);
+                String text = bestRecognitionResult(results, lang, recognitionContext);
                 if (!text.isEmpty()) jsRecognition(id, "final", text);
                 finishRecognition(id);
             }
+
             @Override public void onPartialResults(Bundle partialResults) {
                 if (!isCurrentRecognition(id)) return;
-                String text = firstResult(partialResults);
+                String text = bestRecognitionResult(partialResults, lang, recognitionContext);
                 if (!text.isEmpty()) jsRecognition(id, "partial", text);
             }
+
             @Override public void onEvent(int eventType, Bundle params) { }
         });
+
         Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
         intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
         intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang);
         intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-        intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
+
+        // TEST2A: ask Android for multiple hypotheses instead of accepting only one.
+        intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5);
+
+        // Keep the proven TEST1C turn timing.
         intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1800L);
         intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 900L);
-        try { speechRecognizer.startListening(intent); }
-        catch (Exception e) {
+
+        // Android 13+ can bias recognition toward words that fit the current situation.
+        // Unsupported recognizers are allowed to ignore these hints.
+        if (Build.VERSION.SDK_INT >= 33) {
+            ArrayList<String> hints = recognitionHints(lang, recognitionContext);
+            if (!hints.isEmpty()) {
+                intent.putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, hints);
+            }
+        }
+
+        try {
+            speechRecognizer.startListening(intent);
+        } catch (Exception e) {
             jsRecognition(id, "error", "audio-capture");
             finishRecognition(id);
         }
     }
 
-    private String firstResult(Bundle b) {
+    private String normalizeRecognitionContext(String context) {
+        String c = context == null ? "auto" : context.trim().toLowerCase(Locale.ROOT);
+        if ("work".equals(c) || "travel".equals(c) || "daily".equals(c) || "auto".equals(c)) return c;
+        return "auto";
+    }
+
+    private String bestRecognitionResult(Bundle b, String lang, String context) {
         if (b == null) return "";
         ArrayList<String> list = b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-        return (list == null || list.isEmpty() || list.get(0) == null) ? "" : list.get(0).trim();
+        if (list == null || list.isEmpty()) return "";
+
+        float[] confidence = b.getFloatArray(SpeechRecognizer.CONFIDENCE_SCORES);
+        String best = "";
+        double bestScore = -999.0;
+
+        for (int i = 0; i < list.size() && i < 5; i++) {
+            String candidate = list.get(i) == null ? "" : list.get(i).trim();
+            if (candidate.isEmpty()) continue;
+
+            double score;
+            if (confidence != null && i < confidence.length && confidence[i] >= 0f) {
+                score = confidence[i];
+            } else {
+                // Android already orders hypotheses by likelihood.
+                // Preserve that ordering when confidence is unavailable.
+                score = 1.0 - (i * 0.08);
+            }
+
+            score += contextMatchBoost(candidate, lang, context);
+
+            if (score > bestScore) {
+                bestScore = score;
+                best = candidate;
+            }
+        }
+
+        return best;
+    }
+
+    private double contextMatchBoost(String text, String lang, String context) {
+        if (text == null || text.isEmpty()) return 0.0;
+        String haystack = text.toLowerCase(Locale.ROOT);
+        ArrayList<String> hints = recognitionHints(lang, context);
+        double boost = 0.0;
+
+        for (String hint : hints) {
+            if (hint == null || hint.length() < 2) continue;
+            if (haystack.contains(hint.toLowerCase(Locale.ROOT))) {
+                boost += 0.025;
+                if (boost >= 0.10) return 0.10;
+            }
+        }
+        return boost;
+    }
+
+    private ArrayList<String> recognitionHints(String lang, String context) {
+        ArrayList<String> out = new ArrayList<>();
+        String l = lang == null ? "" : lang.toLowerCase(Locale.ROOT);
+        String c = normalizeRecognitionContext(context);
+
+        if (l.startsWith("ko")) {
+            addHints(out,
+                "안녕하세요", "감사합니다", "괜찮아요", "잠깐만요", "다시 말해 주세요",
+                "어디예요", "얼마예요", "카드 돼요", "이거", "그거", "주세요",
+                "맞아요", "아니요", "몰라요", "어떻게", "언제", "어디");
+
+            if ("auto".equals(c) || "work".equals(c)) {
+                addHints(out,
+                    "학생", "학년", "반", "담임", "보호자", "재학증명서", "전학",
+                    "방과후", "급식", "결석", "서류", "신청", "발급", "제출", "서명");
+            }
+
+            if ("auto".equals(c) || "travel".equals(c)) {
+                addHints(out,
+                    "공항", "여권", "탑승구", "수하물", "체크인", "체크아웃",
+                    "호텔", "예약", "식당", "메뉴", "맵지 않게", "알레르기",
+                    "계산", "택시", "기차", "버스", "화장실");
+            }
+
+            if ("auto".equals(c) || "daily".equals(c)) {
+                addHints(out,
+                    "뭐 해요", "어디 가요", "밥 먹었어요", "좋아요", "싫어요",
+                    "잠깐만", "다시 한번", "괜찮습니다", "필요해요", "필요 없어요");
+            }
+        } else if (l.startsWith("en")) {
+            addHints(out,
+                "hello", "thank you", "please", "excuse me", "sorry",
+                "where is", "how much", "card", "cash", "bathroom",
+                "airport", "hotel", "reservation", "check in", "check out",
+                "restaurant", "menu", "not spicy", "allergy", "taxi",
+                "train", "bus", "school", "student", "document", "signature");
+        }
+
+        return out;
+    }
+
+    private void addHints(ArrayList<String> target, String... values) {
+        for (String value : values) {
+            if (value != null && !value.isEmpty() && !target.contains(value)) target.add(value);
+        }
     }
 
     private boolean isCurrentRecognition(String id) {
@@ -454,7 +587,12 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public void startRecognition(String id, String lang) {
-            main.post(() -> startNativeRecognition(id, lang));
+            main.post(() -> startNativeRecognition(id, lang, "auto"));
+        }
+
+        @JavascriptInterface
+        public void startRecognitionWithContext(String id, String lang, String context) {
+            main.post(() -> startNativeRecognition(id, lang, context));
         }
 
         @JavascriptInterface
@@ -480,7 +618,7 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public String appVersion() { return "1.0-test1c-realtime"; }
+        public String appVersion() { return "1.0-test2a-smart-recognition"; }
     }
 
     @Override
@@ -675,7 +813,7 @@ public class MainActivity extends Activity {
         r.lang=lang;
         r.continuous=false;
         r.interimResults=true;
-        r.maxAlternatives=1;
+        r.maxAlternatives=5;
 
         const current=()=>generation===session.__rtGeneration && !session.closed;
 
@@ -978,14 +1116,42 @@ public class MainActivity extends Activity {
   };
 
   const recognizers={}; let recSeq=0;
+
+  const validRecognitionContexts=new Set(['auto','work','travel','daily']);
+  const normalizeRecognitionContext=value=>{
+    const v=String(value||'auto').toLowerCase();
+    return validRecognitionContexts.has(v)?v:'auto';
+  };
+  window.__recognitionContext=normalizeRecognitionContext(
+    localStorage.getItem('ans_recognition_context')||'auto'
+  );
+  window.setRecognitionContext=function(value){
+    const v=normalizeRecognitionContext(value);
+    window.__recognitionContext=v;
+    try{ localStorage.setItem('ans_recognition_context',v); }catch(e){}
+    return v;
+  };
+  window.getRecognitionContext=function(){
+    return normalizeRecognitionContext(window.__recognitionContext);
+  };
+
   function NativeRecognition(){
-    this.lang='ko-KR'; this.continuous=true; this.interimResults=false; this.maxAlternatives=1;
+    this.lang='ko-KR'; this.continuous=true; this.interimResults=false; this.maxAlternatives=5;
     this.onstart=this.onspeechstart=this.onspeechend=this.onresult=this.onerror=this.onend=null;
     this.__id=null;
   }
   NativeRecognition.prototype.start=function(){
     this.__id='r'+Date.now()+'_'+(++recSeq); recognizers[this.__id]=this;
-    AndroidAudio.startRecognition(this.__id,String(this.lang||'ko-KR'));
+    const context=normalizeRecognitionContext(window.__recognitionContext);
+    try{
+      AndroidAudio.startRecognitionWithContext(
+        this.__id,
+        String(this.lang||'ko-KR'),
+        context
+      );
+    }catch(e){
+      AndroidAudio.startRecognition(this.__id,String(this.lang||'ko-KR'));
+    }
   };
   NativeRecognition.prototype.stop=function(){ if(this.__id) AndroidAudio.stopRecognition(this.__id,false); };
   NativeRecognition.prototype.abort=function(){ if(this.__id) AndroidAudio.stopRecognition(this.__id,true); };
