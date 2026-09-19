@@ -134,7 +134,7 @@ public class MainActivity extends Activity {
                 if (url.startsWith(APP_URL)) injectNativeBridgeJs();
             }
         });
-        webView.loadUrl(APP_URL + "?native=1.0-test2b2");
+        webView.loadUrl(APP_URL + "?native=1.0-test2b1r");
     }
 
     private void initTts() {
@@ -618,7 +618,7 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public String appVersion() { return "1.0-test2b2-fast-stable-auto"; }
+        public String appVersion() { return "1.0-test2b1r-rollback"; }
     }
 
     @Override
@@ -780,7 +780,7 @@ public class MainActivity extends Activity {
             window.__primeRealtimeTranslation(snapshot,this.side);
           }
         }catch(e){ console.warn('realtime prime',e); }
-      },220);
+      },350);
     };
 
     SS.prototype.arm=function(){
@@ -1030,19 +1030,7 @@ public class MainActivity extends Activity {
         const found=rtCache.get(key);
         if(found && now-found.time<8000)return found.promise;
 
-        const runTranslate=async()=>{
-          try{
-            return await originalTranslate(text,sourceKey,targetKey);
-          }catch(error){
-            const code=String(error?.message||error||'');
-            if(/^(NETWORK|TIMEOUT|TRANSLATE_FAILED|BAD_RESPONSE)$/.test(code)){
-              await new Promise(resolve=>setTimeout(resolve,180));
-              return await originalTranslate(text,sourceKey,targetKey);
-            }
-            throw error;
-          }
-        };
-        const promise=Promise.resolve(runTranslate())
+        const promise=Promise.resolve(originalTranslate(text,sourceKey,targetKey))
           .catch(error=>{ rtCache.delete(key); throw error; });
 
         rtCache.set(key,{time:now,promise});
@@ -1167,95 +1155,6 @@ public class MainActivity extends Activity {
   window.getRecognitionContext=function(){
     return normalizeRecognitionContext(window.__recognitionContext);
   };
-
-
-  // TEST2B2: faster turn handoff and resilient automatic conversation.
-  // In the Android wrapper, microphone permission is already enforced natively.
-  // Avoid opening getUserMedia on every single automatic-conversation turn.
-  try{
-    if(typeof ensureMicrophonePermission==='function' && !window.__nativeFastMicPermission){
-      window.__nativeFastMicPermission=true;
-      const webEnsureMicrophonePermission=ensureMicrophonePermission;
-      ensureMicrophonePermission=async function(statusEl){
-        try{
-          if(window.AndroidAudio && typeof AndroidAudio.startRecognitionWithContext==='function'){
-            const status=typeof statusEl==='string'?document.querySelector(statusEl):statusEl;
-            if(status){
-              status.className='status ok';
-              status.textContent='음성 인식 준비됨';
-            }
-            return true;
-          }
-        }catch(e){}
-        return await webEnsureMicrophonePermission(statusEl);
-      };
-    }
-  }catch(e){
-    console.warn('native fast microphone permission',e);
-  }
-
-  // Existing web auto-conversation waits 850 ms after every TTS.
-  // The native TTS callback already tells us playback has actually ended, so a
-  // much shorter handoff is safe and feels more conversational.
-  try{
-    if(typeof scheduleAutoTurn==='function' && !window.__nativeFastAutoTurn){
-      window.__nativeFastAutoTurn=true;
-      const webScheduleAutoTurn=scheduleAutoTurn;
-      scheduleAutoTurn=function(side,delay=300){
-        const requested=Number(delay);
-        const fastDelay=Number.isFinite(requested)?Math.min(requested,300):300;
-        return webScheduleAutoTurn(side,Math.max(180,fastDelay));
-      };
-    }
-  }catch(e){
-    console.warn('native fast auto turn',e);
-  }
-
-  // Do not drop out of automatic conversation just because Android briefly
-  // reports no-speech / no-match or the repetition guard asks for review.
-  // Real permission/language-support problems still pause normally.
-  try{
-    if(typeof pauseAutoConversation==='function' && !window.__nativeAutoRecovery){
-      window.__nativeAutoRecovery=true;
-      const webPauseAutoConversation=pauseAutoConversation;
-      pauseAutoConversation=function(message='자동대화를 일시정지했습니다.'){
-        try{
-          const msg=String(message||'');
-          const side=(typeof autoConversationTurn!=='undefined' && autoConversationTurn==='visitor')?'visitor':'staff';
-          const statusEl=document.querySelector(side==='staff'?'#staffSpeechStatus':'#speechStatus');
-          const statusText=String(statusEl?.textContent||'');
-          const fatal=/권한|지원하지|사용할 수 없|마이크.*차단|not-allowed/i.test(msg+' '+statusText);
-          const recoverable=/음성인식 오류|인식 문장 확인/.test(msg);
-          if(!fatal && recoverable &&
-             typeof conversationMode!=='undefined' && conversationMode==='auto' &&
-             typeof autoConversationActive!=='undefined' && autoConversationActive){
-            if(typeof clearAutoConversationTimer==='function')clearAutoConversationTimer();
-            const b=document.getElementById('autoConversationBtn');
-            if(b){
-              b.dataset.paused='false';
-              b.classList.add('active');
-              b.textContent='자동대화 종료';
-            }
-            const dock=document.getElementById('dockStatus');
-            if(dock)dock.textContent='잠깐 못 들었습니다 · 자동으로 다시 듣습니다';
-            setTimeout(()=>{
-              try{
-                if(conversationMode==='auto' && autoConversationActive){
-                  if(typeof beginSpeech==='function')beginSpeech(side);
-                }
-              }catch(e){console.warn('native auto retry',e);}
-            },360);
-            return;
-          }
-        }catch(e){
-          console.warn('native auto recovery',e);
-        }
-        return webPauseAutoConversation(message);
-      };
-    }
-  }catch(e){
-    console.warn('native auto recovery install',e);
-  }
 
   // TEST2B: 업무용 / 여행용 / 일상용 상황 선택 + 자동대화 중심 UI.
   const SCENARIO_MODE_KEY='ans_usage_mode_v2';
