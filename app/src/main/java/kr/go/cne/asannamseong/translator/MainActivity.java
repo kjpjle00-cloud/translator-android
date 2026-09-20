@@ -134,7 +134,7 @@ public class MainActivity extends Activity {
                 if (url.startsWith(APP_URL)) injectNativeBridgeJs();
             }
         });
-        webView.loadUrl(APP_URL + "?native=1.0-test2b1");
+        webView.loadUrl(APP_URL + "?native=1.0-test2b1-auto19");
     }
 
     private void initTts() {
@@ -618,7 +618,7 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public String appVersion() { return "1.0-test2b1-server-recovery"; }
+        public String appVersion() { return "1.0-test2b1-auto19"; }
     }
 
     @Override
@@ -1162,15 +1162,15 @@ public class MainActivity extends Activity {
   const SCENARIO_DEFS={
     work:{
       label:'업무용',icon:'💼',
-      details:['학교·교육','행정·민원','회사·사무','병원·의료','계약·서류']
+      details:['학교·교육','행정·민원','회사·사무','병원·의료','계약·서류','방문·전화응대']
     },
     travel:{
       label:'여행용',icon:'✈️',
-      details:['공항','출입국','숙소','식당','교통','관광','쇼핑','긴급상황']
+      details:['공항','출입국','숙소','식당','교통','관광','쇼핑','길찾기','긴급상황']
     },
     daily:{
       label:'일상용',icon:'🏠',
-      details:['인사·소개','가족·친구','약속·시간','음식·생활','쇼핑','길찾기','자유대화']
+      details:['인사·소개','가족·친구','약속·시간','음식·생활','쇼핑','길찾기','감정·의견','자유대화']
     }
   };
 
@@ -1205,7 +1205,11 @@ public class MainActivity extends Activity {
       .native-manual-row{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:10px}
       .native-manual-btn{border:1px solid #cfdee6;background:#fff;color:#244b66;border-radius:14px;padding:12px 8px;font-size:15px;font-weight:800}
       .native-auto-help{font-size:12px;color:#728694;text-align:center;margin-top:9px}
-      body[data-page="conversation"] .speech-dock{display:none!important}
+      .speech-dock{display:none!important}
+      .native-manual-tools{margin-top:12px;color:#486275}
+      .native-manual-tools summary{cursor:pointer;font-size:13px}
+      #nativeScenarioPanel,#nativeAutoPanel{display:none}
+      body[data-page="conversation"] #nativeScenarioPanel,body[data-page="conversation"] #nativeAutoPanel{display:block}
       @media(max-width:620px){
         #nativeScenarioPanel,#nativeAutoPanel{padding:0 8px}
         .native-scenario-card,.native-auto-card{border-radius:16px;padding:11px}
@@ -1256,15 +1260,15 @@ public class MainActivity extends Activity {
       <div class="native-auto-card">
         <div class="native-auto-head">
           <div class="native-auto-title">🤖 자동대화</div>
-          <div class="native-auto-badge">● 자동 인식 ON</div>
+          <div class="native-auto-badge" id="nativeAutoBadge">● 대기 중</div>
         </div>
         <div id="nativeAutoStatus" class="native-auto-status">언어와 상황을 선택한 뒤 자동대화를 시작하세요.</div>
         <button id="nativeAutoMainBtn" class="native-auto-main" type="button">▶ 자동대화 시작</button>
-        <div class="native-manual-row">
+        <details class="native-manual-tools"><summary>수동 보조 기능</summary><div class="native-manual-row">
           <button id="nativeManualStaffBtn" class="native-manual-btn" type="button">🎤 내가 말하기</button>
           <button id="nativeManualVisitorBtn" class="native-manual-btn" type="button">🎧 수동 듣기</button>
         </div>
-        <div class="native-auto-help">자동대화에서는 번역 음성이 끝나면 상대방 차례를 자동으로 듣습니다.</div>
+        </details><div class="native-auto-help">자동대화에서는 번역 음성이 끝나면 상대방 차례를 자동으로 듣습니다.</div>
       </div>
     `;
     const workspaceHeading=document.querySelector('.workspace-heading');
@@ -1287,12 +1291,13 @@ public class MainActivity extends Activity {
       const running=autoRunning();
       autoMain.classList.toggle('active',running);
       autoMain.textContent=running?'■ 자동대화 종료':'▶ 자동대화 시작';
+      autoPanel.querySelector('#nativeAutoBadge').textContent=running?'● 자동대화 진행 중':'● 대기 중';
     }
 
     function syncStatus(){
       const dock=document.getElementById('dockStatus');
       const text=(dock?.textContent||'').trim();
-      autoStatus.textContent=text || (autoRunning()?'자동대화 진행 중':'언어와 상황을 선택한 뒤 자동대화를 시작하세요.');
+      autoStatus.textContent=(!text || /버튼을 누르고/.test(text)) ? (autoRunning()?'자동으로 듣고 있습니다. 편하게 말씀하세요.':'언어와 상황을 선택한 뒤 자동대화를 시작하세요.') : text;
     }
 
     function stopAutoBeforeContextChange(){
@@ -1372,12 +1377,38 @@ public class MainActivity extends Activity {
       new MutationObserver(syncStatus).observe(dock,{childList:true,subtree:true,characterData:true});
     }
 
+    if(typeof setConversationMode==='function')setConversationMode('auto');
+    for(const id of ['staffHeardText','heardText']){
+      const el=document.getElementById(id);
+      if(el && /아래 버튼/.test(el.textContent||''))el.textContent='자동대화를 시작하면 인식한 말이 여기에 표시됩니다.';
+    }
+    for(const id of ['staffSpeechStatus','speechStatus']){
+      const el=document.getElementById(id);
+      if(!el)continue;
+      const clean=()=>{
+        const text=el.textContent||'';
+        if(/버튼을 누를 때만|이제 음성인식 버튼/.test(text))el.textContent='자동대화를 시작하면 순서에 맞춰 음성을 듣습니다.';
+      };
+      new MutationObserver(clean).observe(el,{childList:true,subtree:true,characterData:true});clean();
+    }
+    const note=document.querySelector('.quick-note');
+    if(note)note.textContent='자동대화 번역 연결';
     setMode(mode);
     syncAutoButton();
     syncStatus();
   }
 
-  setTimeout(installScenarioUI,0);
+  let uiAttempts=0;
+  function ensureScenarioUI(){
+    try{
+      if(!document.querySelector('.languagebar') || typeof setConversationMode!=='function')throw new Error('Page not ready');
+      installScenarioUI();
+    }catch(e){
+      if(++uiAttempts<40)setTimeout(ensureScenarioUI,250);
+      else console.error('Automatic conversation UI failed',e);
+    }
+  }
+  setTimeout(ensureScenarioUI,0);
 
   function NativeRecognition(){
     this.lang='ko-KR'; this.continuous=true; this.interimResults=false; this.maxAlternatives=5;
@@ -1418,7 +1449,7 @@ public class MainActivity extends Activity {
   function installStatus(){
     if(document.getElementById('nativeEarphoneStatus')) return;
     const bar=document.createElement('button'); bar.id='nativeEarphoneStatus'; bar.type='button';
-    bar.style.cssText='position:fixed;z-index:99999;right:8px;top:8px;max-width:calc(100vw - 16px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:#0f5c55;color:white;border:0;padding:8px 11px;border-radius:999px;font:700 11px system-ui;box-shadow:0 3px 14px #0003;cursor:pointer';
+    bar.style.cssText='position:static;display:block;margin:0 auto 8px;max-width:calc(100vw - 16px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:#0f5c55;color:white;border:0;padding:8px 11px;border-radius:999px;font:700 11px system-ui;box-shadow:0 3px 14px #0003;cursor:pointer';
     let st=''; let mode=true;
     try{st=AndroidAudio.audioStatus(); mode=!!AndroidAudio.earphoneMode();}catch(e){}
 
@@ -1444,7 +1475,7 @@ public class MainActivity extends Activity {
     });
 
     paint();
-    document.body.appendChild(bar);
+    (document.querySelector('.top')||document.body).appendChild(bar);
     place();
     window.addEventListener('resize',place);
     window.addEventListener('orientationchange',()=>setTimeout(place,120));
