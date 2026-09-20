@@ -1,11 +1,21 @@
-# 아산남성초 통역기 Android 통합판
+# 일상번역기 (Daily Translator)
 
-기존 웹 통역기 `https://translator-942.pages.dev/`를 Android 앱 안에서 사용하면서 출력 장치를 분리하는 시험판입니다.
+기존 학교 전용 통역기 코드를 폐기하고 새 기획서 기준으로 초기화한 Android 프로젝트입니다.
 
-- 직원 한국어 → 외국어: 휴대폰 스피커
-- 민원인 외국어 → 한국어: 이어폰
-- 기존 웹 통역기 UI/민원문장/즐겨찾기/내 문구/수동·자동대화 기능 사용
+## 초기화 상태
+- 기존 학교명/남성초 관련 명칭 제거
+- 기존 WebView 덧씌우기 코드 제거
+- 기존 web-reference-v6.8.7 제거
+- 기존 기능설계/변경사항/설치문서 제거
+- 새 앱 표시명: 일상번역기
+- 새 프로젝트명: DailyTranslator
+- 새 패키지: com.kjpjle00.dailytranslator
+- 버전: 0.1.0-reset / versionCode 1
 
-## APK 빌드
-이 저장소에 파일을 올리면 GitHub Actions의 `Build Android APK`가 자동 실행됩니다.
-성공 후 Actions > 실행 항목 > Artifacts > `NamseongTranslator-debug`를 내려받아 압축을 풀고 `app-debug.apk`를 스마트폰에 설치합니다.
+## 앞으로 구현할 핵심
+1. 지속세션형 자동대화
+2. 업무·민원 / 여행 / 일상 기본 멘트
+3. 같은 화자가 끊었다가 이어서 말할 수 있는 인식
+4. 사용자가 종료하기 전까지 자동대화 세션 유지
+5. 외국어 스피커 / 한국어 이어폰 분리 출력
+6. 즐겨찾기 / 내 문구 / 기록 / 설정

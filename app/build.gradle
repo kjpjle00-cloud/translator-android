@@ -3,15 +3,15 @@ plugins {
 }
 
 android {
-    namespace 'kr.go.cne.asannamseong.translator'
+    namespace 'com.kjpjle00.dailytranslator'
     compileSdk 36
 
     defaultConfig {
-        applicationId 'kr.go.cne.asannamseong.translator'
+        applicationId 'com.kjpjle00.dailytranslator'
         minSdk 28
         targetSdk 36
-        versionCode 2026092001
-        versionName '1.0-test2b1-auto29'
+        versionCode 1
+        versionName '0.1.0-reset'
     }
 
     signingConfigs {

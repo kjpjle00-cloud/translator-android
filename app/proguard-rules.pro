@@ -1,3 +1,2 @@
--keepclassmembers class * {
-    @android.webkit.JavascriptInterface <methods>;
-}
+# 일상번역기 초기화 버전
+# 기능 개발 전 기본 상태
