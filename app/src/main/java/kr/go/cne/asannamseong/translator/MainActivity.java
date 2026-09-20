@@ -134,7 +134,7 @@ public class MainActivity extends Activity {
                 if (url.startsWith(APP_URL)) injectNativeBridgeJs();
             }
         });
-        webView.loadUrl(APP_URL + "?native=1.0-test2b1-auto23");
+        webView.loadUrl(APP_URL + "?native=1.0-test2b1-auto25");
     }
 
     private void initTts() {
@@ -618,7 +618,7 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public String appVersion() { return "1.0-test2b1-auto23"; }
+        public String appVersion() { return "1.0-test2b1-auto25"; }
     }
 
     @Override
@@ -1218,7 +1218,7 @@ public class MainActivity extends Activity {
     return normalizeRecognitionContext(window.__recognitionContext);
   };
 
-  // AUTO23: 번역/TTS/이어폰 엔진은 그대로 두고 보이는 자동대화 화면만 교체한다.
+  // AUTO25: 번역/TTS/이어폰 엔진은 그대로 두고 보이는 자동대화 화면만 교체한다.
   const SCENARIO_MODE_KEY='ans_usage_mode_v2';
   const SCENARIO_DETAIL_KEY='ans_usage_detail_v2';
   const SCENARIO_DEFS={
@@ -1312,7 +1312,7 @@ public class MainActivity extends Activity {
 
     const autoPanel=document.createElement('section');
     autoPanel.id='nativeAutoPanel';
-    autoPanel.innerHTML='<div class="native-card native-auto-card"><div class="native-auto-head"><div class="native-auto-title">🤖 자동대화</div><div id="nativeAutoBadge" class="native-auto-badge">● 대기 중</div></div><div id="nativeAutoStatus" class="native-auto-status">언어와 상황을 선택한 뒤 자동대화를 시작하세요.</div><button id="nativeAutoMainBtn" class="native-auto-main" type="button">▶ 자동대화 시작</button><div class="native-auto-help">직원 한국어 → 번역·재생 → 민원인 외국어 → 번역·재생 순서로 종료할 때까지 반복합니다.</div></div>';
+    autoPanel.innerHTML='<div class="native-card native-auto-card"><div class="native-auto-head"><div class="native-auto-title">🤖 자동대화</div><div id="nativeAutoBadge" class="native-auto-badge">● 대기 중</div></div><div id="nativeAutoStatus" class="native-auto-status">언어와 상황을 선택한 뒤 자동대화를 시작하세요.</div><button id="nativeAutoMainBtn" class="native-auto-main" type="button">▶ 자동대화 시작</button><div class="native-auto-help">직원 말 → 번역·재생 → 상대방 응답 대기 · 1.8초 무응답이면 직원이 바로 이어서 말할 수 있습니다.</div></div>';
 
     const livePanel=document.createElement('section');
     livePanel.id='nativeLivePanel';
@@ -1439,12 +1439,12 @@ public class MainActivity extends Activity {
           if(typeof startAutoConversation==='function')startAutoConversation();
           else document.getElementById('autoConversationBtn')?.click();
         }
-      }catch(e){console.error('auto23 toggle',e);}
+      }catch(e){console.error('auto25 toggle',e);}
       setTimeout(syncAll,50);
     };
 
-    if(typeof scheduleAutoTurn==='function'&&!window.__auto23FastTurn){
-      const originalSchedule=scheduleAutoTurn;window.__auto23FastTurn=true;
+    if(typeof scheduleAutoTurn==='function'&&!window.__auto25FastTurn){
+      const originalSchedule=scheduleAutoTurn;window.__auto25FastTurn=true;
       scheduleAutoTurn=function(side,delay){
         const n=Number(delay);
         return originalSchedule(side,Math.min(Number.isFinite(n)&&n>0?n:360,360));
@@ -1462,14 +1462,14 @@ public class MainActivity extends Activity {
     setMode(mode);syncAll();return true;
   }
 
-  let auto23UiAttempts=0;
+  let auto25UiAttempts=0;
   function ensureAuto23UI(){
     try{
       if(!document.querySelector('.languagebar')||typeof setConversationMode!=='function')throw new Error('Page not ready');
       if(installScenarioUI())return;
     }catch(e){
-      if(++auto23UiAttempts<40){setTimeout(ensureAuto23UI,250);return;}
-      console.error('AUTO23 UI failed',e);
+      if(++auto25UiAttempts<40){setTimeout(ensureAuto23UI,250);return;}
+      console.error('AUTO25 UI failed',e);
     }
   }
   setTimeout(ensureAuto23UI,0);
@@ -1478,9 +1478,59 @@ public class MainActivity extends Activity {
     this.lang='ko-KR'; this.continuous=true; this.interimResults=false; this.maxAlternatives=5;
     this.onstart=this.onspeechstart=this.onspeechend=this.onresult=this.onerror=this.onend=null;
     this.__id=null;
+    this.__heard=false;
+    this.__autoSide='';
+    this.__autoSilenceTimer=null;
+    this.__autoSilenceHandled=false;
   }
+
+  function clearAutoSilenceTimer(r){
+    if(!r)return;
+    clearTimeout(r.__autoSilenceTimer);
+    r.__autoSilenceTimer=null;
+  }
+
+  function handleAutoSilence(r){
+    if(!r || r.__autoSilenceHandled || r.__heard)return false;
+    let running=false;
+    try{running=conversationMode==='auto'&&autoConversationActive;}catch(e){}
+    if(!running)return false;
+
+    r.__autoSilenceHandled=true;
+    clearAutoSilenceTimer(r);
+    const silentSide=r.__autoSide==='visitor'?'visitor':'staff';
+    const nextSide=silentSide==='visitor'?'staff':'staff';
+
+    // Close only the current microphone session. Keep automatic conversation ON.
+    try{cancelActiveSpeech();}catch(e){
+      try{if(r.__id)AndroidAudio.stopRecognition(r.__id,true);}catch(ignore){}
+    }
+
+    const dock=document.getElementById('dockStatus');
+    if(dock){
+      dock.textContent=silentSide==='visitor'
+        ? '상대방 응답 없음 · 직원 말씀을 다시 듣습니다'
+        : '직원 말씀을 계속 기다립니다';
+    }
+
+    setTimeout(()=>{
+      try{
+        if(conversationMode==='auto'&&autoConversationActive){
+          scheduleAutoTurn(nextSide,0);
+        }
+      }catch(e){}
+    },120);
+    return true;
+  }
+
   NativeRecognition.prototype.start=function(){
     this.__id='r'+Date.now()+'_'+(++recSeq); recognizers[this.__id]=this;
+    this.__heard=false;
+    this.__autoSilenceHandled=false;
+    clearAutoSilenceTimer(this);
+    try{
+      this.__autoSide=(conversationMode==='auto'&&autoConversationActive)?String(autoConversationTurn||'staff'):'';
+    }catch(e){this.__autoSide='';}
     const context=normalizeRecognitionContext(window.__recognitionContext);
     try{
       AndroidAudio.startRecognitionWithContext(
@@ -1492,22 +1542,45 @@ public class MainActivity extends Activity {
       AndroidAudio.startRecognition(this.__id,String(this.lang||'ko-KR'));
     }
   };
-  NativeRecognition.prototype.stop=function(){ if(this.__id) AndroidAudio.stopRecognition(this.__id,false); };
-  NativeRecognition.prototype.abort=function(){ if(this.__id) AndroidAudio.stopRecognition(this.__id,true); };
+  NativeRecognition.prototype.stop=function(){ clearAutoSilenceTimer(this); if(this.__id) AndroidAudio.stopRecognition(this.__id,false); };
+  NativeRecognition.prototype.abort=function(){ clearAutoSilenceTimer(this); if(this.__id) AndroidAudio.stopRecognition(this.__id,true); };
   window.SpeechRecognition=NativeRecognition;
   window.webkitSpeechRecognition=NativeRecognition;
   window.__nativeRecognitionEvent=function(id,type,payload){
     const r=recognizers[id]; if(!r) return;
-    if(type==='start') safe(r.onstart,{type:'start'});
-    else if(type==='speechstart') safe(r.onspeechstart,{type:'speechstart'});
+    if(type==='start'){
+      safe(r.onstart,{type:'start'});
+      clearAutoSilenceTimer(r);
+      let running=false;
+      try{running=conversationMode==='auto'&&autoConversationActive;}catch(e){}
+      if(running){
+        const dock=document.getElementById('dockStatus');
+        if(dock && r.__autoSide==='visitor')dock.textContent='상대방 말씀을 기다립니다 · 무응답이면 직원 차례로 돌아갑니다';
+        r.__autoSilenceTimer=setTimeout(()=>handleAutoSilence(r),1800);
+      }
+    }
+    else if(type==='speechstart'){
+      r.__heard=true; clearAutoSilenceTimer(r);
+      safe(r.onspeechstart,{type:'speechstart'});
+    }
     else if(type==='speechend') safe(r.onspeechend,{type:'speechend'});
     else if(type==='partial'||type==='final'){
+      r.__heard=true; clearAutoSilenceTimer(r);
       const alt={transcript:String(payload||''),confidence:1};
       const row=[alt]; row.isFinal=(type==='final');
       const results=[row];
       safe(r.onresult,{resultIndex:0,results:results});
-    } else if(type==='error') safe(r.onerror,{error:String(payload||'unknown')});
-    else if(type==='end'){ safe(r.onend,{type:'end'}); delete recognizers[id]; r.__id=null; }
+    } else if(type==='error'){
+      const err=String(payload||'unknown');
+      clearAutoSilenceTimer(r);
+      if((err==='no-speech'||err==='aborted')&&!r.__heard&&handleAutoSilence(r))return;
+      safe(r.onerror,{error:err});
+    }
+    else if(type==='end'){
+      clearAutoSilenceTimer(r);
+      if(!r.__heard && handleAutoSilence(r))return;
+      safe(r.onend,{type:'end'}); delete recognizers[id]; r.__id=null;
+    }
   };
 
   function installStatus(){
