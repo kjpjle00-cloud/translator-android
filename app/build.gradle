@@ -10,8 +10,8 @@ android {
         applicationId 'com.kjpjle00.dailytranslator'
         minSdk 28
         targetSdk 36
-        versionCode 5
-        versionName '0.5.0-multilang'
+        versionCode 6
+        versionName '0.6.0-speech-model'
     }
 
     signingConfigs {
@@ -31,7 +31,10 @@ android {
         release {
             signingConfig signingConfigs.release
             minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            proguardFiles getDefaultProguardFile(
+                    'proguard-android-optimize.txt',
+                    'proguard-rules.pro'
+            )
         }
     }
 
