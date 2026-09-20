@@ -48,6 +48,8 @@ public class MainActivity extends Activity {
     private TextView phraseTitle;
     private TextView favoriteFilterButton;
     private TextView selectedPhraseText;
+    private TextView translatedPhraseText;
+    private TranslationEngine translationEngine;
 
     private String selectedCategory = "여행용";
     private String selectedScenario = "식당";
@@ -57,6 +59,7 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         phraseStore = new BasicPhraseStore(this);
+        translationEngine = new TranslationEngine(this);
 
         getWindow().setStatusBarColor(Color.WHITE);
         getWindow().setNavigationBarColor(Color.WHITE);
@@ -300,14 +303,65 @@ public class MainActivity extends Activity {
         selected.addView(selectedPhraseText);
         selected.addView(space(7));
 
+        TextView translatedLabel = text("영어 번역", 10, BLUE, true);
+        translatedPhraseText = text(
+                "번역 버튼을 누르면 실제 영어 번역이 여기에 표시됩니다.",
+                12,
+                Color.rgb(52, 87, 119),
+                false
+        );
+        selected.addView(translatedLabel);
+        selected.addView(space(4));
+        selected.addView(translatedPhraseText);
+        selected.addView(space(8));
+
         TextView speak = pill("🔊 번역해서 말하기", 12, WHITE, TEAL, TEAL_DARK, 16);
         speak.setGravity(Gravity.CENTER);
         speak.setPadding(dp(10), dp(9), dp(10), dp(9));
-        speak.setOnClickListener(v -> Toast.makeText(
-                this,
-                "다음 단계에서 선택 문구를 실제 번역·음성 재생에 연결합니다.",
-                Toast.LENGTH_SHORT
-        ).show());
+        speak.setOnClickListener(v -> {
+            String source = selectedPhraseText.getText().toString().trim();
+
+            if (source.isEmpty() || source.startsWith("아래 기본 멘트")) {
+                Toast.makeText(
+                        this,
+                        "먼저 기본 멘트나 내 문구를 선택해 주세요.",
+                        Toast.LENGTH_SHORT
+                ).show();
+                return;
+            }
+
+            speak.setEnabled(false);
+            speak.setText("번역 준비 중...");
+            translatedPhraseText.setText("번역 모델 확인 및 번역 중...");
+
+            translationEngine.translateKoreanToEnglish(
+                    source,
+                    new TranslationEngine.Callback() {
+                        @Override
+                        public void onSuccess(String translatedText) {
+                            runOnUiThread(() -> {
+                                translatedPhraseText.setText(translatedText);
+                                speak.setText("🔊 다시 듣기");
+                                speak.setEnabled(true);
+                            });
+                        }
+
+                        @Override
+                        public void onError(String message) {
+                            runOnUiThread(() -> {
+                                translatedPhraseText.setText("번역 실패: " + message);
+                                speak.setText("🔊 번역해서 말하기");
+                                speak.setEnabled(true);
+                                Toast.makeText(
+                                        MainActivity.this,
+                                        "번역에 실패했습니다. 인터넷 연결을 확인해 주세요.",
+                                        Toast.LENGTH_LONG
+                                ).show();
+                            });
+                        }
+                    }
+            );
+        });
         selected.addView(speak);
 
         card.addView(selected);
@@ -415,6 +469,9 @@ public class MainActivity extends Activity {
 
     private void selectPhrase(BasicPhraseStore.Phrase phrase) {
         selectedPhraseText.setText(phrase.text);
+        if (translatedPhraseText != null) {
+            translatedPhraseText.setText("번역 버튼을 누르면 실제 영어 번역이 표시됩니다.");
+        }
         Toast.makeText(this, "문구를 선택했습니다.", Toast.LENGTH_SHORT).show();
     }
 
@@ -922,6 +979,14 @@ public class MainActivity extends Activity {
             case "부탁·대화": return "☏";
             default: return "•";
         }
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (translationEngine != null) {
+            translationEngine.close();
+        }
+        super.onDestroy();
     }
 
     private LinearLayout hbox() {
