@@ -492,6 +492,7 @@ public class MainActivity extends Activity {
             empty.setGravity(Gravity.CENTER);
             empty.setPadding(dp(8), dp(16), dp(8), dp(16));
             phraseList.addView(empty);
+            syncRecognitionContext();
             return;
         }
 
@@ -503,6 +504,25 @@ public class MainActivity extends Activity {
         }
 
         if (phraseExpanded) warmCurrentPhrases();
+        syncRecognitionContext();
+    }
+
+    private void syncRecognitionContext() {
+        if (autoConversationEngine == null || phraseStore == null) return;
+
+        List<BasicPhraseStore.Phrase> phrases =
+                phraseStore.get(selectedCategory, selectedScenario, false);
+        ArrayList<String> hints = new ArrayList<>();
+        for (BasicPhraseStore.Phrase phrase : phrases) {
+            if (phrase == null || phrase.text == null) continue;
+            String value = phrase.text.trim();
+            if (value.isEmpty()) continue;
+            hints.add(value);
+            if (hints.size() >= 24) break;
+        }
+
+        autoConversationEngine.setRecognitionContext(
+                selectedCategory, selectedScenario, hints);
     }
 
     private View buildPhraseRow(BasicPhraseStore.Phrase phrase) {

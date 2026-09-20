@@ -10,8 +10,8 @@ android {
         applicationId 'com.kjpjle00.dailytranslator'
         minSdk 28
         targetSdk 36
-        versionCode 10
-        versionName '0.10.0-turn-aware-stt'
+        versionCode 11
+        versionName '0.11.0-colloquial-candidates'
     }
 
     signingConfigs {

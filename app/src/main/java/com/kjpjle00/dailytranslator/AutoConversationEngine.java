@@ -19,6 +19,7 @@ import com.google.mlkit.nl.languageid.LanguageIdentification;
 import com.google.mlkit.nl.languageid.LanguageIdentifier;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -59,6 +60,11 @@ public class AutoConversationEngine {
     private String playbackText;
     private long playbackEndedAt = -10000L;
 
+    // v0.11: recognition context only; does not alter translation/turn state.
+    private String recognitionCategory = "여행용";
+    private String recognitionScenario = "식당";
+    private List<String> recognitionUserHints = Collections.emptyList();
+
     private static final class Request {
         final long generation;
         final long id;
@@ -95,6 +101,24 @@ public class AutoConversationEngine {
             downloading.clear();
             releaseModelRecognizer();
             if (resume) startInternal();
+        });
+    }
+
+    public void setRecognitionContext(String category, String scenario, List<String> userHints) {
+        onMain(() -> {
+            recognitionCategory = category == null ? "" : category.trim();
+            recognitionScenario = scenario == null ? "" : scenario.trim();
+            ArrayList<String> copy = new ArrayList<>();
+            if (userHints != null) {
+                for (String hint : userHints) {
+                    if (hint == null) continue;
+                    String value = hint.trim();
+                    if (value.isEmpty()) continue;
+                    copy.add(value);
+                    if (copy.size() >= 24) break;
+                }
+            }
+            recognitionUserHints = copy;
         });
     }
 
@@ -282,11 +306,29 @@ public class AutoConversationEngine {
                 closeRecognizer(request);
                 ArrayList<String> candidates = results == null ? null
                         : results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-                int index = LanguageDecisionEngine.firstCandidate(candidates);
-                if (index < 0) { retry(request, "인식한 말이 없습니다. 다시 말씀해 주세요."); return; }
-                String raw = candidates.get(index).trim();
-                float[] scores = results.getFloatArray(SpeechRecognizer.CONFIDENCE_SCORES);
+                float[] scores = results == null ? null
+                        : results.getFloatArray(SpeechRecognizer.CONFIDENCE_SCORES);
+
+                EverydaySpeechHints.Selection selected =
+                        EverydaySpeechHints.selectBestCandidate(
+                                candidates, scores, request.speechCode,
+                                request.speechConfidence, request.initialCode,
+                                firstLanguage.code, secondLanguage.code,
+                                recognitionCategory, recognitionScenario,
+                                recognitionUserHints
+                        );
+
+                int index = selected.index;
+                if (index < 0) {
+                    retry(request, "인식한 말이 없습니다. 다시 말씀해 주세요.");
+                    return;
+                }
+                String raw = selected.text;
                 float score = scores != null && index < scores.length ? scores[index] : -1f;
+                Log.d("DailyASR", "request=" + request.id
+                        + " candidateIndex=" + index
+                        + " candidates=" + (candidates == null ? 0 : candidates.size())
+                        + " reason=" + selected.reason); // No transcripts in logs.
                 if (isPlaybackEcho(raw)) { retry(request, "번역음의 잔향을 제외하고 다시 듣습니다."); return; }
                 request.languageTimeout = () -> decide(request, raw, score, new ArrayList<>());
                 handler.postDelayed(request.languageTimeout, 2500);
@@ -454,7 +496,7 @@ public class AutoConversationEngine {
         Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
         intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
         intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, tag);
-        intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5);
+        intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 7);
         return intent;
     }
 
@@ -511,6 +553,14 @@ public class AutoConversationEngine {
                     break;
                 default:
                     break;
+            }
+        }
+
+        if ("ko".equals(firstLanguage.code) || "ko".equals(secondLanguage.code)) {
+            for (String hint : EverydaySpeechHints.biasStrings(
+                    recognitionCategory, recognitionScenario, recognitionUserHints)) {
+                if (!result.contains(hint)) result.add(hint);
+                if (result.size() >= 50) break;
             }
         }
 
