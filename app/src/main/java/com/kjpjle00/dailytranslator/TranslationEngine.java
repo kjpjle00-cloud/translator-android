@@ -19,7 +19,7 @@ public class TranslationEngine {
     }
 
     private final Translator koreanEnglishTranslator;
-    private final TextToSpeech tts;
+    private TextToSpeech tts;
     private boolean ttsReady = false;
     private String pendingSpeech = null;
 
@@ -35,15 +35,16 @@ public class TranslationEngine {
         tts = new TextToSpeech(
                 context.getApplicationContext(),
                 status -> {
-                    if (status == TextToSpeech.SUCCESS) {
+                    if (status == TextToSpeech.SUCCESS && tts != null) {
                         int result = tts.setLanguage(Locale.US);
                         ttsReady =
                                 result != TextToSpeech.LANG_MISSING_DATA
                                 && result != TextToSpeech.LANG_NOT_SUPPORTED;
 
                         if (ttsReady && pendingSpeech != null) {
-                            speakEnglish(pendingSpeech);
+                            String textToSpeak = pendingSpeech;
                             pendingSpeech = null;
+                            speakEnglish(textToSpeak);
                         }
                     }
                 }
@@ -90,7 +91,7 @@ public class TranslationEngine {
             return;
         }
 
-        if (!ttsReady) {
+        if (!ttsReady || tts == null) {
             pendingSpeech = text;
             return;
         }
@@ -105,7 +106,14 @@ public class TranslationEngine {
 
     public void close() {
         koreanEnglishTranslator.close();
-        tts.stop();
-        tts.shutdown();
+
+        if (tts != null) {
+            tts.stop();
+            tts.shutdown();
+            tts = null;
+        }
+
+        ttsReady = false;
+        pendingSpeech = null;
     }
 }
