@@ -6,19 +6,25 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.speech.ModelDownloadListener;
 import android.speech.RecognitionListener;
+import android.speech.RecognitionSupport;
+import android.speech.RecognitionSupportCallback;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
-
+import android.util.Log;
+import com.google.mlkit.nl.languageid.IdentifiedLanguage;
+import com.google.mlkit.nl.languageid.LanguageIdentification;
+import com.google.mlkit.nl.languageid.LanguageIdentifier;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
-import java.util.Locale;
-import java.util.Map;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 
+/** Persistent session; independent recognition evidence for every utterance. */
 public class AutoConversationEngine {
-
     public interface Listener {
         void onListening();
         void onPartial(String text, String languageTag);
@@ -27,923 +33,426 @@ public class AutoConversationEngine {
         void onError(String message);
     }
 
-    private static final long LANGUAGE_LOCK_MS = 8000L;
-    private static final long ECHO_BLOCK_MS = 5000L;
-    private static final long AFTER_TTS_RESTART_MS = 520L;
-
     private final Context context;
     private final Listener listener;
     private final Handler handler = new Handler(Looper.getMainLooper());
-
-    private SpeechRecognizer recognizer;
+    private final LanguageIdentifier languageIdentifier = LanguageIdentification.getClient();
+    private final Runnable restart = this::startListeningNow;
+    private final Set<String> downloading = new HashSet<>();
+    private final Set<String> missingModels = new HashSet<>();
     private AppLanguage firstLanguage = AppLanguage.KOREAN;
     private AppLanguage secondLanguage = AppLanguage.ENGLISH;
+    private SpeechRecognizer modelRecognizer;
+    private Request current;
+    private long generation;
+    private long sequence;
+    private long lastModelRequest = -30000L;
+    private boolean active;
+    private boolean processing;
+    private boolean destroyed;
+    private boolean playbackPaused;
+    // A failed CURRENT detection can request one retry. This is not a speaker lock.
+    private String retryLanguage;
+    private String playbackText;
+    private long playbackEndedAt = -10000L;
 
-    private boolean active = false;
-    private boolean processing = false;
-    private boolean destroyed = false;
-
-    private String detectedLanguage = null;
-    private int detectedConfidence =
-            Build.VERSION.SDK_INT >= 34
-                    ? SpeechRecognizer.LANGUAGE_DETECTION_CONFIDENCE_LEVEL_UNKNOWN
-                    : 0;
-    private int languageSwitchResult =
-            Build.VERSION.SDK_INT >= 34
-                    ? SpeechRecognizer.LANGUAGE_SWITCH_RESULT_NOT_ATTEMPTED
-                    : 0;
-
-    private String lockedLanguageTag = null;
-    private long lockedLanguageAt = 0L;
-    private boolean modelDownloadRequested = false;
-
-    private String lastPlaybackText = null;
-    private long lastPlaybackAt = 0L;
-
-    private final Map<String, String> chineseAliases = new HashMap<>();
-    private final Map<String, String> japaneseAliases = new HashMap<>();
-    private final Map<String, String> thaiAliases = new HashMap<>();
+    private static final class Request {
+        final long generation;
+        final long id;
+        SpeechRecognizer recognizer;
+        String speechCode;
+        boolean conflictingSpeech;
+        boolean switchFailed;
+        boolean finalReceived;
+        Runnable languageTimeout;
+        Request(long generation, long id) { this.generation = generation; this.id = id; }
+    }
 
     public AutoConversationEngine(Context context, Listener listener) {
         this.context = context.getApplicationContext();
         this.listener = listener;
-        initAliases();
-        createRecognizer();
+    }
+
+    private void onMain(Runnable action) {
+        if (Looper.myLooper() == Looper.getMainLooper()) action.run();
+        else handler.post(action);
     }
 
     public void setLanguagePair(AppLanguage first, AppLanguage second) {
-        if (first != null) firstLanguage = first;
-        if (second != null) secondLanguage = second;
-
-        lockedLanguageTag = firstLanguage.speechTag;
-        lockedLanguageAt = 0L;
-
-        boolean wasActive = active;
-        if (wasActive) stop();
-
-        prepareSpeechModels();
-
-        if (wasActive) start();
-    }
-
-    public void suppressPlaybackEcho(String text) {
-        if (text == null || text.trim().isEmpty()) return;
-        lastPlaybackText = normalizeEcho(text);
-        lastPlaybackAt = System.currentTimeMillis();
-    }
-
-    private void createRecognizer() {
-        if (!SpeechRecognizer.isRecognitionAvailable(context)) return;
-
-        recognizer = SpeechRecognizer.createSpeechRecognizer(context);
-        recognizer.setRecognitionListener(new RecognitionListener() {
-            @Override
-            public void onReadyForSpeech(Bundle params) {
-                if (listener != null) listener.onListening();
-            }
-
-            @Override public void onBeginningOfSpeech() {}
-            @Override public void onRmsChanged(float rmsdB) {}
-            @Override public void onBufferReceived(byte[] buffer) {}
-            @Override public void onEndOfSpeech() {}
-
-            @Override
-            public void onError(int error) {
-                if (!active || destroyed || processing) return;
-
-                if (error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE) {
-                    if (listener != null) {
-                        listener.onError("선택한 언어 음성모델 준비 중");
-                    }
-                    prepareSpeechModels();
-                    scheduleRestart(900);
-                    return;
-                }
-
-                if (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED) {
-                    if (listener != null) {
-                        listener.onError(
-                                "현재 휴대폰 음성인식기가 "
-                                        + firstLanguage.name
-                                        + " / "
-                                        + secondLanguage.name
-                                        + " 조합을 지원하지 않습니다."
-                        );
-                    }
-                    scheduleRestart(1200);
-                    return;
-                }
-
-                if (error == SpeechRecognizer.ERROR_NO_MATCH
-                        || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
-                        || error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) {
-                    if (listener != null) listener.onIdleRetry();
-                    scheduleRestart(260);
-                    return;
-                }
-
-                if (listener != null) listener.onError(errorText(error));
-                scheduleRestart(650);
-            }
-
-            @Override
-            public void onResults(Bundle results) {
-                if (!active || destroyed) return;
-
-                ArrayList<String> list =
-                        results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-
-                if (list == null || list.isEmpty()) {
-                    scheduleRestart(240);
-                    return;
-                }
-
-                String expectedTag = strongDetectedTag();
-                if (expectedTag == null && lockIsFresh()) {
-                    expectedTag = lockedLanguageTag;
-                }
-
-                String selected = chooseBestCandidate(list, expectedTag);
-                if (selected == null || selected.trim().isEmpty()) {
-                    rejectAmbiguous("말을 다시 말씀해 주세요.");
-                    return;
-                }
-
-                // 대표적인 한글/로마자 음차를 먼저 실제 문자로 복원한다.
-                selected = normalizePhoneticFallback(selected, detectedLanguage);
-
-                if (isRecentPlaybackEcho(selected)) {
-                    resetDetectionState();
-                    processing = false;
-                    if (listener != null) {
-                        listener.onError("방금 재생한 번역음은 무시했습니다.");
-                    }
-                    scheduleRestart(320);
-                    return;
-                }
-
-                if (looksMixedBetweenSelectedLanguages(selected)) {
-                    rejectAmbiguous("말이 겹쳐 언어를 구분하지 못했습니다. 다시 말씀해 주세요.");
-                    return;
-                }
-
-                String languageTag = decideLanguageStrict(selected);
-
-                if (languageTag == null) {
-                    rejectAmbiguous("언어 판단이 불확실합니다. 다시 말씀해 주세요.");
-                    return;
-                }
-
-                lockedLanguageTag = languageTag;
-                lockedLanguageAt = System.currentTimeMillis();
-
-                processing = true;
-                String finalSelected = selected;
-                String finalLanguageTag = languageTag;
-
-                resetDetectionState();
-
-                if (listener != null) {
-                    listener.onUtterance(finalSelected, finalLanguageTag);
-                }
-            }
-
-            @Override
-            public void onPartialResults(Bundle partialResults) {
-                ArrayList<String> list =
-                        partialResults.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-
-                if (list != null && !list.isEmpty() && listener != null) {
-                    listener.onPartial(list.get(0), detectedLanguage);
-                }
-            }
-
-            @Override public void onEvent(int eventType, Bundle params) {}
-
-            @Override
-            public void onLanguageDetection(Bundle results) {
-                if (Build.VERSION.SDK_INT < 34 || results == null) return;
-
-                String lang = results.getString(SpeechRecognizer.DETECTED_LANGUAGE);
-                if (lang != null && !lang.trim().isEmpty()) {
-                    detectedLanguage = lang;
-                }
-
-                detectedConfidence = results.getInt(
-                        SpeechRecognizer.LANGUAGE_DETECTION_CONFIDENCE_LEVEL,
-                        SpeechRecognizer.LANGUAGE_DETECTION_CONFIDENCE_LEVEL_UNKNOWN
-                );
-
-                languageSwitchResult = results.getInt(
-                        SpeechRecognizer.LANGUAGE_SWITCH_RESULT,
-                        SpeechRecognizer.LANGUAGE_SWITCH_RESULT_NOT_ATTEMPTED
-                );
-
-                if (languageSwitchResult
-                        == SpeechRecognizer.LANGUAGE_SWITCH_RESULT_SKIPPED_NO_MODEL) {
-                    if (listener != null) {
-                        listener.onError("상대 언어 음성모델이 없어 준비 중입니다.");
-                    }
-                    prepareSpeechModels();
-                }
-            }
+        onMain(() -> {
+            boolean resume = active;
+            stopInternal();
+            if (first != null) firstLanguage = first;
+            if (second != null) secondLanguage = second;
+            playbackText = null;
+            lastModelRequest = -30000L;
+            downloading.clear();
+            releaseModelRecognizer();
+            if (resume) startInternal();
         });
-
-        prepareSpeechModels();
     }
 
-    private String strongDetectedTag() {
-        if (detectedLanguage == null || !matchesPair(detectedLanguage)) {
-            return null;
-        }
-
-        if (Build.VERSION.SDK_INT < 34) {
-            return null;
-        }
-
-        if (detectedConfidence
-                >= SpeechRecognizer.LANGUAGE_DETECTION_CONFIDENCE_LEVEL_CONFIDENT) {
-            return languageTagForCode(codeForTag(detectedLanguage));
-        }
-
-        return null;
-    }
-
-    private String decideLanguageStrict(String text) {
-        String scriptTag = inferLanguageFromText(text);
-        String strongTag = strongDetectedTag();
-
-        // 문자와 Android 감지가 둘 다 같은 언어면 가장 확실하다.
-        if (scriptTag != null && strongTag != null
-                && sameLanguage(scriptTag, strongTag)) {
-            return scriptTag;
-        }
-
-        // 한글/한자/가나/태국/키릴 등 문자가 명확하면 문자 판정을 우선한다.
-        if (scriptTag != null && isStrongScriptForPair(text, scriptTag)) {
-            return scriptTag;
-        }
-
-        // Android가 높은 신뢰도로 선택한 두 언어 중 하나를 감지했다면 전환 허용.
-        if (strongTag != null) {
-            return strongTag;
-        }
-
-        // 직전 화자가 계속 말하는 경우: 잠깐의 애매한 짧은 발화는 직전 언어를 유지한다.
-        if (lockIsFresh() && textCompatibleWithLockedLanguage(text)) {
-            return lockedLanguageTag;
-        }
-
-        // 선택한 두 언어 중 한쪽만 라틴 문자 언어라면 라틴 여부로 제한적으로 판정.
-        String latinTag = inferUniqueLatinSide(text);
-        if (latinTag != null) {
-            return latinTag;
-        }
-
-        // 여기서 임의로 '내 언어'라고 찍지 않는다.
-        return null;
-    }
-
-    private boolean textCompatibleWithLockedLanguage(String text) {
-        if (lockedLanguageTag == null) return false;
-
-        String lockedCode = codeForTag(lockedLanguageTag);
-        String scriptTag = inferLanguageFromText(text);
-
-        if (scriptTag != null) {
-            return sameLanguage(scriptTag, lockedLanguageTag);
-        }
-
-        if (isLatinDominant(text)) {
-            return isLatinLanguage(lockedCode);
-        }
-
-        // 짧은 숫자/고유명사 등 문자만으로 판정이 어려운 경우 같은 화자 연속발화로 인정.
-        return text.trim().length() <= 12;
-    }
-
-    private String inferUniqueLatinSide(String text) {
-        if (!isLatinDominant(text)) return null;
-
-        boolean firstLatin = isLatinLanguage(firstLanguage.code);
-        boolean secondLatin = isLatinLanguage(secondLanguage.code);
-
-        if (firstLatin && !secondLatin) return firstLanguage.speechTag;
-        if (!firstLatin && secondLatin) return secondLanguage.speechTag;
-
-        return null;
-    }
-
-    private boolean isStrongScriptForPair(String text, String tag) {
-        String code = codeForTag(tag);
-        if (code == null) return false;
-
-        if ("ko".equals(code)) return countHangul(text) >= 1;
-        if ("zh".equals(code)) return countHan(text) >= 1;
-        if ("ja".equals(code)) return countKana(text) >= 1;
-        if ("th".equals(code)) return countThai(text) >= 1;
-        if ("ru".equals(code)) return countCyrillic(text) >= 1;
-        if ("ar".equals(code)) return countArabic(text) >= 1;
-        if ("hi".equals(code)) return countDevanagari(text) >= 1;
-
-        return false;
-    }
-
-    private boolean looksMixedBetweenSelectedLanguages(String text) {
-        String first = firstLanguage.code;
-        String second = secondLanguage.code;
-
-        int firstCount = scriptCountForCode(text, first);
-        int secondCount = scriptCountForCode(text, second);
-
-        // 라틴-라틴 조합은 문자만으로 혼합 여부를 판정할 수 없다.
-        if (isLatinLanguage(first) && isLatinLanguage(second)) {
-            return false;
-        }
-
-        // 한쪽이 라틴 언어인 경우 라틴 문자도 계산.
-        if (isLatinLanguage(first)) firstCount = countLatin(text);
-        if (isLatinLanguage(second)) secondCount = countLatin(text);
-
-        return firstCount >= 2 && secondCount >= 2;
-    }
-
-    private int scriptCountForCode(String text, String code) {
-        if ("ko".equals(code)) return countHangul(text);
-        if ("zh".equals(code)) return countHan(text);
-        if ("ja".equals(code)) return countKana(text);
-        if ("th".equals(code)) return countThai(text);
-        if ("ru".equals(code)) return countCyrillic(text);
-        if ("ar".equals(code)) return countArabic(text);
-        if ("hi".equals(code)) return countDevanagari(text);
-        if (isLatinLanguage(code)) return countLatin(text);
-        return 0;
-    }
-
-    private void rejectAmbiguous(String message) {
-        resetDetectionState();
-        processing = false;
-        if (listener != null) listener.onError(message);
-        scheduleRestart(320);
-    }
-
-    private boolean lockIsFresh() {
-        return lockedLanguageTag != null
-                && System.currentTimeMillis() - lockedLanguageAt <= LANGUAGE_LOCK_MS;
-    }
-
-    private boolean sameLanguage(String aTag, String bTag) {
-        String a = codeForTag(aTag);
-        String b = codeForTag(bTag);
-        if (a == null || b == null) return false;
-        if (a.equals(b)) return true;
-        return ("tl".equals(a) && "fil".equals(b))
-                || ("fil".equals(a) && "tl".equals(b));
-    }
-
-    private boolean isRecentPlaybackEcho(String text) {
-        if (lastPlaybackText == null) return false;
-        if (System.currentTimeMillis() - lastPlaybackAt > ECHO_BLOCK_MS) return false;
-
-        String now = normalizeEcho(text);
-        if (now.length() < 3 || lastPlaybackText.length() < 3) return false;
-
-        return now.equals(lastPlaybackText)
-                || (now.length() >= 6 && lastPlaybackText.contains(now))
-                || (lastPlaybackText.length() >= 6 && now.contains(lastPlaybackText));
-    }
-
-    private String normalizeEcho(String text) {
-        if (text == null) return "";
-        return text.toLowerCase(Locale.ROOT)
-                .replaceAll("[\\s\\p{Punct}]+", "")
-                .trim();
-    }
-
-    public void prepareSpeechModels() {
-        if (recognizer == null || Build.VERSION.SDK_INT < 33) return;
-
-        requestModel(firstLanguage);
-        requestModel(secondLanguage);
-        modelDownloadRequested = true;
-    }
-
-    private void requestModel(AppLanguage language) {
-        if (recognizer == null || language == null || Build.VERSION.SDK_INT < 33) {
-            return;
-        }
-
-        Intent modelIntent = buildSingleLanguageIntent(language);
-
-        try {
-            if (Build.VERSION.SDK_INT >= 34) {
-                recognizer.triggerModelDownload(
-                        modelIntent,
-                        context.getMainExecutor(),
-                        new ModelDownloadListener() {
-                            @Override
-                            public void onProgress(int completedPercent) {
-                                if (listener != null && completedPercent > 0) {
-                                    listener.onError(
-                                            language.name + " 음성모델 준비 " + completedPercent + "%"
-                                    );
-                                }
-                            }
-
-                            @Override
-                            public void onSuccess() {
-                                if (listener != null) listener.onIdleRetry();
-                            }
-
-                            @Override
-                            public void onScheduled() {
-                                if (listener != null) {
-                                    listener.onError(
-                                            language.name + " 음성모델 다운로드가 예약되었습니다."
-                                    );
-                                }
-                            }
-
-                            @Override
-                            public void onError(int error) {
-                                if (error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE
-                                        && listener != null) {
-                                    listener.onError(
-                                            language.name + " 음성모델을 아직 사용할 수 없습니다."
-                                    );
-                                }
-                            }
-                        }
-                );
-            } else {
-                recognizer.triggerModelDownload(modelIntent);
-            }
-        } catch (Exception ignored) {
-        }
-    }
-
-    private Intent buildSingleLanguageIntent(AppLanguage language) {
-        Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-        intent.putExtra(
-                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
-        );
-        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, language.speechTag);
-        intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false);
-        intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5);
-        return intent;
-    }
-
-    private Intent buildRecognizerIntent() {
-        Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-        intent.putExtra(
-                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
-        );
-
-        String startTag = lockIsFresh()
-                ? lockedLanguageTag
-                : firstLanguage.speechTag;
-
-        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, startTag);
-        intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-        intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5);
-        intent.putExtra(
-                RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
-                1800L
-        );
-        intent.putExtra(
-                RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS,
-                1100L
-        );
-
-        if (Build.VERSION.SDK_INT >= 33) {
-            intent.putExtra(
-                    RecognizerIntent.EXTRA_ENABLE_FORMATTING,
-                    RecognizerIntent.FORMATTING_OPTIMIZE_LATENCY
-            );
-        }
-
-        if (Build.VERSION.SDK_INT >= 34) {
-            ArrayList<String> languages = new ArrayList<>(
-                    Arrays.asList(firstLanguage.speechTag, secondLanguage.speechTag)
-            );
-
-            intent.putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_DETECTION, true);
-            intent.putStringArrayListExtra(
-                    RecognizerIntent.EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES,
-                    languages
-            );
-            intent.putExtra(
-                    RecognizerIntent.EXTRA_ENABLE_LANGUAGE_SWITCH,
-                    RecognizerIntent.LANGUAGE_SWITCH_QUICK_RESPONSE
-            );
-            intent.putStringArrayListExtra(
-                    RecognizerIntent.EXTRA_LANGUAGE_SWITCH_ALLOWED_LANGUAGES,
-                    languages
-            );
-        }
-
-        return intent;
-    }
-
-    private String chooseBestCandidate(
-            ArrayList<String> candidates,
-            String expectedTag
-    ) {
-        String expectedCode = codeForTag(expectedTag);
-
-        if (expectedCode != null) {
-            String best = null;
-            int bestScore = Integer.MIN_VALUE;
-
-            for (String candidate : candidates) {
-                if (candidate == null || candidate.trim().isEmpty()) continue;
-                int score = scriptScore(candidate, expectedCode);
-                if (score > bestScore) {
-                    best = candidate.trim();
-                    bestScore = score;
-                }
-            }
-
-            if (best != null && bestScore > 0) {
-                return best;
-            }
-        }
-
-        for (String candidate : candidates) {
-            if (candidate == null || candidate.trim().isEmpty()) continue;
-            String inferred = inferLanguageFromText(candidate);
-            if (inferred != null) return candidate.trim();
-        }
-
-        return candidates.get(0) == null ? null : candidates.get(0).trim();
-    }
-
-    private String normalizePhoneticFallback(String raw, String languageTag) {
-        if (raw == null) return "";
-
-        String code = codeForTag(languageTag);
-        String key = normalizeAliasKey(raw);
-
-        if ("zh".equals(code) || pairContainsCode("zh")) {
-            String fixed = chineseAliases.get(key);
-            if (fixed != null) return fixed;
-        }
-
-        if ("ja".equals(code) || pairContainsCode("ja")) {
-            String fixed = japaneseAliases.get(key);
-            if (fixed != null) return fixed;
-        }
-
-        if ("th".equals(code) || pairContainsCode("th")) {
-            String fixed = thaiAliases.get(key);
-            if (fixed != null) return fixed;
-        }
-
-        return raw.trim();
-    }
-
-    private boolean matchesPair(String languageTag) {
-        String code = codeForTag(languageTag);
-        if (code == null) return false;
-
-        return code.equals(firstLanguage.code)
-                || code.equals(secondLanguage.code)
-                || ("fil".equals(code)
-                    && (firstLanguage.code.equals("tl")
-                        || secondLanguage.code.equals("tl")));
-    }
-
-    private boolean pairContainsCode(String code) {
-        return firstLanguage.code.equals(code)
-                || secondLanguage.code.equals(code);
-    }
-
-    private String codeForTag(String tag) {
-        if (tag == null || tag.trim().isEmpty()) return null;
-        String lower = tag.toLowerCase(Locale.ROOT);
-
-        if (lower.startsWith("zh")) return "zh";
-        if (lower.startsWith("ja")) return "ja";
-        if (lower.startsWith("ko")) return "ko";
-        if (lower.startsWith("th")) return "th";
-        if (lower.startsWith("ru")) return "ru";
-        if (lower.startsWith("ar")) return "ar";
-        if (lower.startsWith("hi")) return "hi";
-        if (lower.startsWith("fil")) return "fil";
-
-        int dash = lower.indexOf('-');
-        return dash > 0 ? lower.substring(0, dash) : lower;
-    }
-
-    private String languageTagForCode(String code) {
-        if (code == null) return null;
-
-        if (firstLanguage.code.equals(code)) return firstLanguage.speechTag;
-        if (secondLanguage.code.equals(code)) return secondLanguage.speechTag;
-
-        if ("fil".equals(code)) {
-            if (firstLanguage.code.equals("tl")) return firstLanguage.speechTag;
-            if (secondLanguage.code.equals("tl")) return secondLanguage.speechTag;
-        }
-
-        return code;
-    }
-
-    private String inferLanguageFromText(String value) {
-        if (value == null || value.trim().isEmpty()) return null;
-
-        if (countHangul(value) > 0 && pairContainsCode("ko")) {
-            return languageTagForCode("ko");
-        }
-        if (countKana(value) > 0 && pairContainsCode("ja")) {
-            return languageTagForCode("ja");
-        }
-        if (countHan(value) > 0) {
-            if (pairContainsCode("zh")) return languageTagForCode("zh");
-            if (pairContainsCode("ja")) return languageTagForCode("ja");
-        }
-        if (countThai(value) > 0 && pairContainsCode("th")) {
-            return languageTagForCode("th");
-        }
-        if (countCyrillic(value) > 0 && pairContainsCode("ru")) {
-            return languageTagForCode("ru");
-        }
-        if (countArabic(value) > 0 && pairContainsCode("ar")) {
-            return languageTagForCode("ar");
-        }
-        if (countDevanagari(value) > 0 && pairContainsCode("hi")) {
-            return languageTagForCode("hi");
-        }
-
-        return inferUniqueLatinSide(value);
-    }
-
-    private int scriptScore(String value, String expectedCode) {
-        if (value == null || expectedCode == null) return 0;
-        return scriptCountForCode(value, expectedCode) * 4;
-    }
-
-    private int countHangul(String s) {
-        int n = 0;
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (c >= '\uAC00' && c <= '\uD7A3') n++;
-        }
-        return n;
-    }
-
-    private int countHan(String s) {
-        int n = 0;
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (c >= '\u4E00' && c <= '\u9FFF') n++;
-        }
-        return n;
-    }
-
-    private int countKana(String s) {
-        int n = 0;
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (c >= '\u3040' && c <= '\u30FF') n++;
-        }
-        return n;
-    }
-
-    private int countThai(String s) {
-        int n = 0;
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (c >= '\u0E00' && c <= '\u0E7F') n++;
-        }
-        return n;
-    }
-
-    private int countCyrillic(String s) {
-        int n = 0;
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (c >= '\u0400' && c <= '\u04FF') n++;
-        }
-        return n;
-    }
-
-    private int countArabic(String s) {
-        int n = 0;
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (c >= '\u0600' && c <= '\u06FF') n++;
-        }
-        return n;
-    }
-
-    private int countDevanagari(String s) {
-        int n = 0;
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (c >= '\u0900' && c <= '\u097F') n++;
-        }
-        return n;
-    }
-
-    private int countLatin(String s) {
-        int n = 0;
-        for (int i = 0; i < s.length(); i++) {
-            if (isLatinLetter(s.charAt(i))) n++;
-        }
-        return n;
-    }
-
-    private boolean isLatinDominant(String s) {
-        int latin = countLatin(s);
-        int letters = 0;
-        for (int i = 0; i < s.length(); i++) {
-            if (Character.isLetter(s.charAt(i))) letters++;
-        }
-        return letters > 0 && latin * 100 / letters >= 70;
-    }
-
-    private boolean isLatinLetter(char c) {
-        if (!Character.isLetter(c)) return false;
-        Character.UnicodeBlock block = Character.UnicodeBlock.of(c);
-        return block == Character.UnicodeBlock.BASIC_LATIN
-                || block == Character.UnicodeBlock.LATIN_1_SUPPLEMENT
-                || block == Character.UnicodeBlock.LATIN_EXTENDED_A
-                || block == Character.UnicodeBlock.LATIN_EXTENDED_B;
-    }
-
-    private boolean isLatinLanguage(String code) {
-        return "en".equals(code)
-                || "es".equals(code)
-                || "fr".equals(code)
-                || "de".equals(code)
-                || "id".equals(code)
-                || "tl".equals(code)
-                || "vi".equals(code)
-                || "pt".equals(code)
-                || "it".equals(code)
-                || "tr".equals(code);
-    }
-
-    private String normalizeAliasKey(String raw) {
-        return raw.toLowerCase(Locale.ROOT)
-                .replace(" ", "")
-                .replace(".", "")
-                .replace(",", "")
-                .replace("?", "")
-                .replace("!", "")
-                .replace("-", "")
-                .trim();
-    }
-
-    private void initAliases() {
-        chineseAliases.put("니하오", "你好");
-        chineseAliases.put("니하오마", "你好吗");
-        chineseAliases.put("nihao", "你好");
-        chineseAliases.put("nihaoma", "你好吗");
-        chineseAliases.put("셰셰", "谢谢");
-        chineseAliases.put("시에시에", "谢谢");
-        chineseAliases.put("xiexie", "谢谢");
-        chineseAliases.put("짜이찌엔", "再见");
-        chineseAliases.put("짜이젠", "再见");
-        chineseAliases.put("zaijian", "再见");
-        chineseAliases.put("두이부치", "对不起");
-        chineseAliases.put("duibuqi", "对不起");
-        chineseAliases.put("부커치", "不客气");
-        chineseAliases.put("뿌커치", "不客气");
-        chineseAliases.put("bukeqi", "不客气");
-
-        japaneseAliases.put("곤니치와", "こんにちは");
-        japaneseAliases.put("콘니치와", "こんにちは");
-        japaneseAliases.put("konnichiwa", "こんにちは");
-        japaneseAliases.put("오하요", "おはよう");
-        japaneseAliases.put("ohayo", "おはよう");
-        japaneseAliases.put("아리가토", "ありがとう");
-        japaneseAliases.put("아리가또", "ありがとう");
-        japaneseAliases.put("arigato", "ありがとう");
-        japaneseAliases.put("스미마센", "すみません");
-        japaneseAliases.put("sumimasen", "すみません");
-        japaneseAliases.put("사요나라", "さようなら");
-        japaneseAliases.put("sayonara", "さようなら");
-
-        thaiAliases.put("사와디캅", "สวัสดีครับ");
-        thaiAliases.put("사와디카", "สวัสดีค่ะ");
-        thaiAliases.put("sawadeekrap", "สวัสดีครับ");
-        thaiAliases.put("sawadeeka", "สวัสดีค่ะ");
-        thaiAliases.put("컵쿤캅", "ขอบคุณครับ");
-        thaiAliases.put("컵쿤카", "ขอบคุณค่ะ");
-    }
-
-    private void resetDetectionState() {
-        detectedLanguage = null;
-
-        if (Build.VERSION.SDK_INT >= 34) {
-            detectedConfidence =
-                    SpeechRecognizer.LANGUAGE_DETECTION_CONFIDENCE_LEVEL_UNKNOWN;
-            languageSwitchResult =
-                    SpeechRecognizer.LANGUAGE_SWITCH_RESULT_NOT_ATTEMPTED;
-        } else {
-            detectedConfidence = 0;
-            languageSwitchResult = 0;
-        }
-    }
-
-    public boolean isAvailable() {
-        return recognizer != null;
-    }
-
-    public boolean isActive() {
-        return active;
-    }
-
-    public void start() {
-        if (recognizer == null || destroyed) return;
-
+    public boolean isAvailable() { return SpeechRecognizer.isRecognitionAvailable(context); }
+    public boolean isActive() { return active; }
+    public void start() { onMain(this::startInternal); }
+
+    private void startInternal() {
+        if (destroyed || active || !isAvailable()) return;
+        generation++;
         active = true;
         processing = false;
-        resetDetectionState();
-
-        if (!modelDownloadRequested) prepareSpeechModels();
-
+        prepareSpeechModels();
         startListeningNow();
     }
 
-    public void stop() {
+    public void stop() { onMain(this::stopInternal); }
+    private void stopInternal() {
+        generation++;
         active = false;
         processing = false;
-        resetDetectionState();
-        handler.removeCallbacksAndMessages(null);
+        retryLanguage = null;
+        downloading.clear();
+        missingModels.clear();
+        lastModelRequest = -30000L;
+        releaseModelRecognizer();
+        handler.removeCallbacks(restart);
+        retireRequest();
+    }
 
-        if (recognizer != null) {
-            try {
-                recognizer.cancel();
-            } catch (Exception ignored) {
-            }
-        }
+    /** Call before every automatic or phrase translation/playback. */
+    public void pauseForPlayback() {
+        onMain(() -> {
+            playbackPaused = true;
+            handler.removeCallbacks(restart);
+            retireRequest();
+        });
+    }
+
+    public void suppressPlaybackEcho(String text) {
+        onMain(() -> playbackText = normalizeEcho(text));
     }
 
     public void resumeAfterProcessing() {
-        if (!active || destroyed) return;
-        processing = false;
-        scheduleRestart(AFTER_TTS_RESTART_MS);
+        onMain(() -> {
+            playbackEndedAt = SystemClock.elapsedRealtime();
+            playbackPaused = false;
+            processing = false;
+            scheduleRestart(520);
+        });
     }
 
-    private void scheduleRestart(long delayMs) {
-        if (!active || destroyed || processing) return;
+    private void scheduleRestart(long delay) {
+        handler.removeCallbacks(restart);
+        if (active && !destroyed && !processing && !playbackPaused) handler.postDelayed(restart, delay);
+    }
 
-        handler.removeCallbacksAndMessages(null);
-        handler.postDelayed(this::startListeningNow, delayMs);
+    private boolean owns(Request request) {
+        return active && !destroyed && !playbackPaused && current == request
+                && request.generation == generation;
+    }
+
+    private boolean acceptsAudio(Request request) {
+        return owns(request) && !request.finalReceived && !processing;
     }
 
     private void startListeningNow() {
-        if (!active || destroyed || processing || recognizer == null) return;
-
-        try {
-            recognizer.cancel();
-        } catch (Exception ignored) {
+        if (!active || destroyed || processing || playbackPaused) return;
+        if (!missingModels.isEmpty()) {
+            notifyError("선택한 두 언어의 음성모델을 준비하고 있습니다. 자동대화는 유지됩니다.");
+            prepareSpeechModels();
+            scheduleRestart(3000);
+            return;
         }
-
+        retireRequest();
+        Request request = new Request(generation, ++sequence);
+        current = request;
         try {
-            recognizer.startListening(buildRecognizerIntent());
+            request.recognizer = SpeechRecognizer.createSpeechRecognizer(context);
+            request.recognizer.setRecognitionListener(listenerFor(request));
+            String initial = retryLanguage == null ? firstLanguage.speechTag : retryLanguage;
+            retryLanguage = null;
+            request.recognizer.startListening(recognizerIntent(initial));
         } catch (Exception e) {
-            if (listener != null) {
-                listener.onError("음성 인식을 다시 시작하는 중입니다.");
+            if (owns(request)) {
+                retireRequest();
+                notifyError("음성 인식을 다시 준비합니다.");
+                scheduleRestart(1000);
             }
-            scheduleRestart(500);
         }
     }
 
-    private String errorText(int error) {
-        switch (error) {
-            case SpeechRecognizer.ERROR_AUDIO:
-                return "마이크 오류";
-            case SpeechRecognizer.ERROR_NETWORK:
-            case SpeechRecognizer.ERROR_NETWORK_TIMEOUT:
-                return "음성 인식 네트워크 오류";
-            case SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS:
-                return "마이크 권한 필요";
-            case SpeechRecognizer.ERROR_SERVER:
-                return "음성 인식 서버 오류";
-            default:
-                return "음성 인식 다시 시도";
+    private RecognitionListener listenerFor(Request request) {
+        return new RecognitionListener() {
+            @Override public void onReadyForSpeech(Bundle params) {
+                if (acceptsAudio(request) && listener != null) listener.onListening();
+            }
+            @Override public void onBeginningOfSpeech() { }
+            @Override public void onRmsChanged(float value) { }
+            @Override public void onBufferReceived(byte[] buffer) { }
+            @Override public void onEndOfSpeech() { }
+            @Override public void onEvent(int type, Bundle params) { }
+
+            @Override public void onPartialResults(Bundle results) {
+                if (!acceptsAudio(request) || results == null) return;
+                ArrayList<String> candidates = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                int index = LanguageDecisionEngine.firstCandidate(candidates);
+                if (index >= 0 && listener != null) listener.onPartial(candidates.get(index), request.speechCode);
+            }
+
+            @Override public void onLanguageDetection(Bundle results) {
+                if (!acceptsAudio(request) || results == null || Build.VERSION.SDK_INT < 34) return;
+                String code = LanguageDecisionEngine.code(results.getString(SpeechRecognizer.DETECTED_LANGUAGE));
+                int confidence = results.getInt(SpeechRecognizer.LANGUAGE_DETECTION_CONFIDENCE_LEVEL,
+                        SpeechRecognizer.LANGUAGE_DETECTION_CONFIDENCE_LEVEL_UNKNOWN);
+                int switched = results.getInt(SpeechRecognizer.LANGUAGE_SWITCH_RESULT,
+                        SpeechRecognizer.LANGUAGE_SWITCH_RESULT_NOT_ATTEMPTED);
+                if (switched == SpeechRecognizer.LANGUAGE_SWITCH_RESULT_FAILED
+                        || switched == SpeechRecognizer.LANGUAGE_SWITCH_RESULT_SKIPPED_NO_MODEL) {
+                    request.switchFailed = true;
+                    if (switched == SpeechRecognizer.LANGUAGE_SWITCH_RESULT_SKIPPED_NO_MODEL
+                            && tagFor(code) != null) missingModels.add(code);
+                    prepareSpeechModels();
+                }
+                // Keep a complete observation. Never combine an old tag with a new score.
+                if (code != null && confidence >= SpeechRecognizer.LANGUAGE_DETECTION_CONFIDENCE_LEVEL_CONFIDENT) {
+                    if (request.speechCode != null && !request.speechCode.equals(code)) {
+                        request.conflictingSpeech = true;
+                    }
+                    request.speechCode = code;
+                }
+            }
+
+            @Override public void onResults(Bundle results) {
+                if (!acceptsAudio(request)) return;
+                request.finalReceived = true;
+                processing = true;
+                closeRecognizer(request);
+                ArrayList<String> candidates = results == null ? null
+                        : results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                int index = LanguageDecisionEngine.firstCandidate(candidates);
+                if (index < 0) { retry(request, "인식한 말이 없습니다. 다시 말씀해 주세요."); return; }
+                String raw = candidates.get(index).trim();
+                float[] scores = results.getFloatArray(SpeechRecognizer.CONFIDENCE_SCORES);
+                float score = scores != null && index < scores.length ? scores[index] : -1f;
+                if (isPlaybackEcho(raw)) { retry(request, "번역음의 잔향을 제외하고 다시 듣습니다."); return; }
+                request.languageTimeout = () -> decide(request, raw, score, new ArrayList<>());
+                handler.postDelayed(request.languageTimeout, 2500);
+                languageIdentifier.identifyPossibleLanguages(raw)
+                        .addOnSuccessListener(found -> onMain(() -> {
+                            List<LanguageDecisionEngine.TextEvidence> evidence = new ArrayList<>();
+                            for (IdentifiedLanguage language : found) evidence.add(
+                                    new LanguageDecisionEngine.TextEvidence(language.getLanguageTag(), language.getConfidence()));
+                            decide(request, raw, score, evidence);
+                        }))
+                        .addOnFailureListener(e -> onMain(() -> decide(request, raw, score, new ArrayList<>())));
+            }
+
+            @Override public void onError(int error) {
+                if (!acceptsAudio(request)) return;
+                retireRequest();
+                if (error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE) {
+                    if (request.speechCode != null) missingModels.add(request.speechCode);
+                    prepareSpeechModels();
+                    notifyError("음성인식 언어 모델이 필요합니다. 다운로드 후 다시 말씀해 주세요.");
+                    scheduleRestart(2500);
+                } else if (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED) {
+                    notifyError("현재 음성인식 서비스가 선택한 언어를 지원하지 않습니다.");
+                    scheduleRestart(5000);
+                } else if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
+                    stopInternal();
+                    notifyError("마이크 권한을 확인하고 자동대화를 다시 시작해 주세요.");
+                } else {
+                    if (listener != null) listener.onIdleRetry();
+                    scheduleRestart(error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY ? 1000 : 450);
+                }
+            }
+        };
+    }
+
+    private void decide(Request request, String raw, float score,
+            List<LanguageDecisionEngine.TextEvidence> evidence) {
+        if (!owns(request) || !processing) return;
+        if (request.languageTimeout != null) handler.removeCallbacks(request.languageTimeout);
+        if (!missingModels.isEmpty()) {
+            retry(request, "음성모델 준비 중입니다. 준비 후 다시 말씀해 주세요.");
+            return;
         }
+        LanguageDecisionEngine.Decision decision = LanguageDecisionEngine.decide(raw,
+                firstLanguage.code, secondLanguage.code, request.speechCode,
+                request.conflictingSpeech, request.switchFailed, score, evidence);
+        Log.d("DailyLanguage", "request=" + request.id + " reason=" + decision.reason
+                + " source=" + decision.sourceCode); // No transcripts/recordings in logs.
+        if (!decision.confirmed()) {
+            if (!request.conflictingSpeech && request.speechCode != null) retryLanguage = tagFor(request.speechCode);
+            retry(request, request.switchFailed
+                    ? "음성 언어 전환을 완료하지 못했습니다. 모델 준비 후 다시 말씀해 주세요."
+                    : "인식한 말: “" + raw + "” · 언어가 불확실하여 다시 듣습니다.");
+            return;
+        }
+        String tag = tagFor(decision.sourceCode);
+        retireRequest();
+        // processing stays true until translation/playback completion.
+        if (tag != null && listener != null) listener.onUtterance(decision.text, tag);
+        else { processing = false; scheduleRestart(400); }
+    }
+
+    private void retry(Request request, String message) {
+        if (!owns(request)) return;
+        retireRequest();
+        processing = false;
+        notifyError(message);
+        scheduleRestart(600);
+    }
+
+    private String tagFor(String code) {
+        code = LanguageDecisionEngine.code(code);
+        if (firstLanguage.code.equals(code)) return firstLanguage.speechTag;
+        if (secondLanguage.code.equals(code)) return secondLanguage.speechTag;
+        return null;
+    }
+
+    private void notifyError(String message) { if (listener != null) listener.onError(message); }
+
+    private void retireRequest() {
+        Request previous = current;
+        current = null; // Invalidate BEFORE cancel/destroy can deliver callbacks.
+        if (previous != null) {
+            if (previous.languageTimeout != null) handler.removeCallbacks(previous.languageTimeout);
+            closeRecognizer(previous);
+        }
+    }
+
+    private void closeRecognizer(Request request) {
+        SpeechRecognizer recognizer = request.recognizer;
+        request.recognizer = null;
+        if (recognizer != null) {
+            try { recognizer.cancel(); } catch (Exception ignored) { }
+            recognizer.destroy();
+        }
+    }
+
+    private Intent recognizerIntent(String initialLanguage) {
+        Intent intent = singleLanguageIntent(initialLanguage);
+        intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
+        intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1800L);
+        intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1100L);
+        if (Build.VERSION.SDK_INT >= 34) {
+            ArrayList<String> pair = new ArrayList<>(Arrays.asList(firstLanguage.speechTag, secondLanguage.speechTag));
+            intent.putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_DETECTION, true);
+            intent.putStringArrayListExtra(RecognizerIntent.EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES, pair);
+            intent.putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_SWITCH, RecognizerIntent.LANGUAGE_SWITCH_BALANCED);
+            intent.putStringArrayListExtra(RecognizerIntent.EXTRA_LANGUAGE_SWITCH_ALLOWED_LANGUAGES, pair);
+        }
+        return intent;
+    }
+
+    private Intent singleLanguageIntent(String tag) {
+        Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, tag);
+        intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5);
+        return intent;
+    }
+
+    public void prepareSpeechModels() {
+        onMain(() -> {
+            if (destroyed || Build.VERSION.SDK_INT < 33 || !isAvailable()) return;
+            long now = SystemClock.elapsedRealtime();
+            if (now - lastModelRequest < 30000) return;
+            lastModelRequest = now;
+            final long epoch = generation;
+            try {
+                if (modelRecognizer == null) modelRecognizer = SpeechRecognizer.createSpeechRecognizer(context);
+                modelRecognizer.checkRecognitionSupport(recognizerIntent(firstLanguage.speechTag),
+                        context.getMainExecutor(), new RecognitionSupportCallback() {
+                            @Override public void onSupportResult(RecognitionSupport support) {
+                                if (destroyed || epoch != generation) return;
+                                for (AppLanguage language : new AppLanguage[]{firstLanguage, secondLanguage}) {
+                                    if (containsLanguage(support.getInstalledOnDeviceLanguages(), language.code)) {
+                                        missingModels.remove(language.code);
+                                    } else {
+                                        if (containsLanguage(support.getPendingOnDeviceLanguages(), language.code)
+                                                || containsLanguage(support.getSupportedOnDeviceLanguages(), language.code)) {
+                                            missingModels.add(language.code);
+                                        }
+                                        requestModel(language, epoch);
+                                    }
+                                }
+                                if (!missingModels.isEmpty() && !processing) {
+                                    retireRequest();
+                                    scheduleRestart(3000);
+                                }
+                            }
+                            @Override public void onError(int error) {
+                                if (destroyed || epoch != generation) return;
+                                // Unknown is not supported. Still request the models where possible.
+                                requestModel(firstLanguage, epoch);
+                                requestModel(secondLanguage, epoch);
+                            }
+                        });
+            } catch (Exception e) {
+                notifyError("음성모델 준비 상태를 확인할 수 없습니다. 인식 결과를 검증하며 듣습니다.");
+            }
+        });
+    }
+
+    private boolean containsLanguage(List<String> tags, String code) {
+        for (String tag : tags) if (code.equals(LanguageDecisionEngine.code(tag))) return true;
+        return false;
+    }
+
+    private void requestModel(AppLanguage language, long epoch) {
+        if (modelRecognizer == null || !downloading.add(language.code)) return;
+        try {
+            if (Build.VERSION.SDK_INT >= 34) {
+                modelRecognizer.triggerModelDownload(singleLanguageIntent(language.speechTag),
+                        context.getMainExecutor(), new ModelDownloadListener() {
+                            @Override public void onProgress(int progress) { }
+                            @Override public void onSuccess() {
+                                if (destroyed || epoch != generation) return;
+                                downloading.remove(language.code);
+                                missingModels.remove(language.code);
+                                if (missingModels.isEmpty() && current == null) scheduleRestart(0);
+                            }
+                            @Override public void onScheduled() {
+                                if (destroyed || epoch != generation) return;
+                                downloading.remove(language.code);
+                                notifyError(language.name + " 음성모델 다운로드가 예약되어 있습니다.");
+                            }
+                            @Override public void onError(int error) {
+                                if (destroyed || epoch != generation) return;
+                                downloading.remove(language.code);
+                                notifyError(language.name + " 음성모델 준비를 확인해 주세요.");
+                            }
+                        });
+            } else {
+                modelRecognizer.triggerModelDownload(singleLanguageIntent(language.speechTag));
+                downloading.remove(language.code);
+            }
+        } catch (Exception e) { downloading.remove(language.code); }
+    }
+
+    private String normalizeEcho(String text) {
+        return text == null ? "" : text.toLowerCase(java.util.Locale.ROOT).replaceAll("[\\s\\p{P}]+", "");
+    }
+
+    private boolean isPlaybackEcho(String text) {
+        // Short exact guard; never erase a sentence merely containing old translated words.
+        return playbackText != null && playbackText.length() >= 3
+                && SystemClock.elapsedRealtime() - playbackEndedAt < 1200L
+                && playbackText.equals(normalizeEcho(text));
+    }
+
+    private void releaseModelRecognizer() {
+        if (modelRecognizer != null) { modelRecognizer.destroy(); modelRecognizer = null; }
     }
 
     public void destroy() {
-        destroyed = true;
-        active = false;
-        processing = false;
-        handler.removeCallbacksAndMessages(null);
-
-        if (recognizer != null) {
-            try {
-                recognizer.cancel();
-            } catch (Exception ignored) {
-            }
-            recognizer.destroy();
-            recognizer = null;
-        }
+        onMain(() -> {
+            stopInternal();
+            destroyed = true;
+            releaseModelRecognizer();
+            languageIdentifier.close();
+        });
     }
 }

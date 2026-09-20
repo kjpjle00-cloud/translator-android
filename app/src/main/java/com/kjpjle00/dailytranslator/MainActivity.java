@@ -156,14 +156,28 @@ public class MainActivity extends Activity {
                     @Override
                     public void onError(String message) {
                         runOnUiThread(() -> {
-                            if (autoStatus != null && autoConversationEngine.isActive()) {
-                                autoStatus.setText("자동대화 유지 중 · " + message);
+                            if (autoStatus != null) {
+                                if (!autoConversationEngine.isActive()) updateAutoUi();
+                                autoStatus.setText((autoConversationEngine.isActive()
+                                        ? "자동대화 유지 중 · " : "자동대화 중지 · ") + message);
                             }
                         });
                     }
                 }
         );
         autoConversationEngine.setLanguagePair(myLanguage, otherLanguage);
+
+        translationEngine.setPlaybackListener(new TranslationEngine.PlaybackListener() {
+            @Override public void onRequestStarted() {
+                autoConversationEngine.pauseForPlayback();
+            }
+            @Override public void onPlaybackPrepared(String text) {
+                autoConversationEngine.suppressPlaybackEcho(text);
+            }
+            @Override public void onRequestFinished() {
+                autoConversationEngine.resumeAfterProcessing();
+            }
+        });
 
         getWindow().setStatusBarColor(Color.WHITE);
         getWindow().setNavigationBarColor(Color.WHITE);
@@ -559,6 +573,10 @@ public class MainActivity extends Activity {
 
     private void playPhraseImmediately(BasicPhraseStore.Phrase phrase, TextView button) {
         if (phrase == null || phrase.text == null || phrase.text.trim().isEmpty()) return;
+        if (translationEngine.isBusy()) {
+            Toast.makeText(this, "현재 번역 음성이 끝난 뒤 다시 눌러 주세요.", Toast.LENGTH_SHORT).show();
+            return;
+        }
 
         button.setEnabled(false);
         button.setText("…");
@@ -571,7 +589,6 @@ public class MainActivity extends Activity {
                 new TranslationEngine.Callback() {
                     @Override
                     public void onSuccess(String translatedText) {
-                        autoConversationEngine.suppressPlaybackEcho(translatedText);
                         runOnUiThread(() -> {
                             button.setText("🔊");
                             button.setEnabled(true);
@@ -593,6 +610,14 @@ public class MainActivity extends Activity {
 
                     @Override
                     public void onSpeechComplete() {
+                    }
+
+                    @Override
+                    public void onCancelled() {
+                        runOnUiThread(() -> {
+                            button.setText("🔊");
+                            button.setEnabled(true);
+                        });
                     }
                 }
         );
@@ -1113,7 +1138,6 @@ public class MainActivity extends Activity {
                             }
                             autoStatus.setText("자동대화 유지 중 · 다시 듣기");
                         });
-                        autoConversationEngine.resumeAfterProcessing();
                     }
 
                     @Override
@@ -1123,7 +1147,6 @@ public class MainActivity extends Activity {
                                 autoStatus.setText("자동대화 유지 중 · 말씀하세요");
                             }
                         });
-                        autoConversationEngine.resumeAfterProcessing();
                     }
                 }
         );
