@@ -10,8 +10,8 @@ android {
         applicationId 'com.kjpjle00.dailytranslator'
         minSdk 28
         targetSdk 36
-        versionCode 3
-        versionName '0.3.0-translate'
+        versionCode 4
+        versionName '0.4.0-auto-fast'
     }
 
     signingConfigs {
@@ -40,7 +40,6 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
 }
-
 
 dependencies {
     implementation 'com.google.mlkit:translate:17.0.3'

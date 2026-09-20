@@ -1,7 +1,10 @@
 package com.kjpjle00.dailytranslator;
 
+import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.Context;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -12,7 +15,6 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
 import android.view.inputmethod.InputMethodManager;
-import android.content.Context;
 import android.widget.EditText;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
@@ -21,6 +23,7 @@ import android.widget.Space;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.util.ArrayList;
 import java.util.List;
 
 public class MainActivity extends Activity {
@@ -38,28 +41,91 @@ public class MainActivity extends Activity {
     private static final int GREEN = Color.rgb(39, 173, 83);
     private static final int WHITE = Color.WHITE;
     private static final int RED = Color.rgb(191, 61, 61);
+    private static final int REQ_MIC = 2201;
 
     private final String[] categories = {"업무용", "여행용", "일상용"};
 
     private BasicPhraseStore phraseStore;
+    private TranslationEngine translationEngine;
+    private AutoConversationEngine autoConversationEngine;
+
     private LinearLayout categoryRow;
     private LinearLayout scenarioRow;
     private LinearLayout phraseList;
+    private LinearLayout phraseBody;
     private TextView phraseTitle;
+    private TextView phraseToggle;
     private TextView favoriteFilterButton;
-    private TextView selectedPhraseText;
-    private TextView translatedPhraseText;
-    private TranslationEngine translationEngine;
+
+    private TextView autoBadge;
+    private TextView autoStatus;
+    private TextView autoButton;
+    private TextView micButton;
+
+    private TextView mySourceText;
+    private TextView myTranslatedText;
+    private TextView otherSourceText;
+    private TextView otherTranslatedText;
 
     private String selectedCategory = "여행용";
     private String selectedScenario = "식당";
     private boolean favoritesOnly = false;
+    private boolean phraseExpanded = false;
+    private boolean autoStartAfterPermission = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
         phraseStore = new BasicPhraseStore(this);
         translationEngine = new TranslationEngine(this);
+        translationEngine.preload();
+
+        autoConversationEngine = new AutoConversationEngine(
+                this,
+                new AutoConversationEngine.Listener() {
+                    @Override
+                    public void onListening() {
+                        runOnUiThread(() -> {
+                            if (autoStatus != null) {
+                                autoStatus.setText("듣는 중 · 한국어/영어 자동 감지");
+                            }
+                        });
+                    }
+
+                    @Override
+                    public void onPartial(String text, String languageTag) {
+                        runOnUiThread(() -> {
+                            if (autoStatus != null && text != null && !text.trim().isEmpty()) {
+                                autoStatus.setText("듣는 중 · " + text);
+                            }
+                        });
+                    }
+
+                    @Override
+                    public void onUtterance(String text, String languageTag) {
+                        handleAutoUtterance(text, languageTag);
+                    }
+
+                    @Override
+                    public void onIdleRetry() {
+                        runOnUiThread(() -> {
+                            if (autoStatus != null && autoConversationEngine.isActive()) {
+                                autoStatus.setText("자동대화 유지 중 · 말씀하세요");
+                            }
+                        });
+                    }
+
+                    @Override
+                    public void onError(String message) {
+                        runOnUiThread(() -> {
+                            if (autoStatus != null && autoConversationEngine.isActive()) {
+                                autoStatus.setText("자동대화 유지 중 · " + message);
+                            }
+                        });
+                    }
+                }
+        );
 
         getWindow().setStatusBarColor(Color.WHITE);
         getWindow().setNavigationBarColor(Color.WHITE);
@@ -113,10 +179,6 @@ public class MainActivity extends Activity {
         page.addView(space(8));
         page.addView(buildOtherSpeechCard());
         page.addView(space(9));
-        page.addView(buildProgressButton());
-        page.addView(space(8));
-        page.addView(buildManualButtons());
-        page.addView(space(11));
         page.addView(buildBottomNav());
 
         ScrollView scroll = new ScrollView(this);
@@ -134,6 +196,8 @@ public class MainActivity extends Activity {
         refreshCategoryTabs();
         refreshScenarios();
         refreshPhrases();
+        updatePhraseVisibility();
+        updateAutoUi();
     }
 
     private View buildHeader() {
@@ -148,7 +212,7 @@ public class MainActivity extends Activity {
         LinearLayout titleBox = vbox();
         titleBox.setPadding(dp(9), 0, 0, 0);
         TextView title = text("일상번역기", 24, NAVY, true);
-        TextView sub = text("업무 · 여행 · 일상  |  기본 멘트 + 지속 자동대화", 11, MUTED, false);
+        TextView sub = text("업무 · 여행 · 일상  |  빠른 번역 + 지속 자동대화", 11, MUTED, false);
         titleBox.addView(title);
         titleBox.addView(space(1));
         titleBox.addView(sub);
@@ -248,11 +312,12 @@ public class MainActivity extends Activity {
 
     private View buildPhrasePanel() {
         LinearLayout card = vbox();
-        card.setPadding(dp(11), dp(10), dp(11), dp(11));
+        card.setPadding(dp(11), dp(10), dp(11), dp(10));
         card.setBackground(round(WHITE, 16, BORDER, 1));
 
         LinearLayout header = hbox();
         header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(0, dp(2), 0, dp(2));
 
         LinearLayout titleBox = vbox();
         TextView title = text("기본 멘트", 17, TEXT, true);
@@ -263,11 +328,39 @@ public class MainActivity extends Activity {
         header.addView(titleBox,
                 new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
+        phraseToggle = pill("펼치기 ▼", 11, TEAL_DARK, PALE_TEAL,
+                Color.rgb(194, 231, 231), 14);
+        phraseToggle.setGravity(Gravity.CENTER);
+        phraseToggle.setPadding(dp(10), dp(7), dp(10), dp(7));
+        header.addView(phraseToggle);
+
+        header.setOnClickListener(v -> {
+            phraseExpanded = !phraseExpanded;
+            updatePhraseVisibility();
+            if (phraseExpanded) {
+                warmCurrentPhrases();
+            }
+        });
+        phraseToggle.setOnClickListener(v -> {
+            phraseExpanded = !phraseExpanded;
+            updatePhraseVisibility();
+            if (phraseExpanded) {
+                warmCurrentPhrases();
+            }
+        });
+
+        card.addView(header);
+
+        phraseBody = vbox();
+        phraseBody.addView(space(8));
+
+        LinearLayout tools = hbox();
+
         TextView add = pill("+ 내 문구", 11, WHITE, TEAL, TEAL, 14);
         add.setGravity(Gravity.CENTER);
         add.setPadding(dp(10), dp(7), dp(10), dp(7));
         add.setOnClickListener(v -> showPhraseEditor(null));
-        header.addView(add);
+        tools.addView(add);
 
         favoriteFilterButton = pill("☆ 즐겨찾기", 11, NAVY, WHITE, BORDER, 14);
         favoriteFilterButton.setGravity(Gravity.CENTER);
@@ -277,95 +370,27 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.WRAP_CONTENT
         );
         fp.setMargins(dp(6), 0, 0, 0);
-        header.addView(favoriteFilterButton, fp);
+        tools.addView(favoriteFilterButton, fp);
 
         favoriteFilterButton.setOnClickListener(v -> {
             favoritesOnly = !favoritesOnly;
             refreshPhrases();
         });
 
-        card.addView(header);
-        card.addView(space(8));
+        phraseBody.addView(tools);
+        phraseBody.addView(space(8));
 
         phraseList = vbox();
-        card.addView(phraseList);
+        phraseBody.addView(phraseList);
+        card.addView(phraseBody);
 
-        card.addView(space(8));
-
-        LinearLayout selected = vbox();
-        selected.setPadding(dp(10), dp(9), dp(10), dp(9));
-        selected.setBackground(round(PALE_TEAL, 14, Color.rgb(194, 231, 231), 1));
-
-        TextView selectedLabel = text("선택된 문구", 10, TEAL_DARK, true);
-        selectedPhraseText = text("아래 기본 멘트를 누르면 여기에 선택됩니다.", 13, TEXT, true);
-        selected.addView(selectedLabel);
-        selected.addView(space(4));
-        selected.addView(selectedPhraseText);
-        selected.addView(space(7));
-
-        TextView translatedLabel = text("영어 번역", 10, BLUE, true);
-        translatedPhraseText = text(
-                "번역 버튼을 누르면 실제 영어 번역이 여기에 표시됩니다.",
-                12,
-                Color.rgb(52, 87, 119),
-                false
-        );
-        selected.addView(translatedLabel);
-        selected.addView(space(4));
-        selected.addView(translatedPhraseText);
-        selected.addView(space(8));
-
-        TextView speak = pill("🔊 번역해서 말하기", 12, WHITE, TEAL, TEAL_DARK, 16);
-        speak.setGravity(Gravity.CENTER);
-        speak.setPadding(dp(10), dp(9), dp(10), dp(9));
-        speak.setOnClickListener(v -> {
-            String source = selectedPhraseText.getText().toString().trim();
-
-            if (source.isEmpty() || source.startsWith("아래 기본 멘트")) {
-                Toast.makeText(
-                        this,
-                        "먼저 기본 멘트나 내 문구를 선택해 주세요.",
-                        Toast.LENGTH_SHORT
-                ).show();
-                return;
-            }
-
-            speak.setEnabled(false);
-            speak.setText("번역 준비 중...");
-            translatedPhraseText.setText("번역 모델 확인 및 번역 중...");
-
-            translationEngine.translateKoreanToEnglish(
-                    source,
-                    new TranslationEngine.Callback() {
-                        @Override
-                        public void onSuccess(String translatedText) {
-                            runOnUiThread(() -> {
-                                translatedPhraseText.setText(translatedText);
-                                speak.setText("🔊 다시 듣기");
-                                speak.setEnabled(true);
-                            });
-                        }
-
-                        @Override
-                        public void onError(String message) {
-                            runOnUiThread(() -> {
-                                translatedPhraseText.setText("번역 실패: " + message);
-                                speak.setText("🔊 번역해서 말하기");
-                                speak.setEnabled(true);
-                                Toast.makeText(
-                                        MainActivity.this,
-                                        "번역에 실패했습니다. 인터넷 연결을 확인해 주세요.",
-                                        Toast.LENGTH_LONG
-                                ).show();
-                            });
-                        }
-                    }
-            );
-        });
-        selected.addView(speak);
-
-        card.addView(selected);
         return card;
+    }
+
+    private void updatePhraseVisibility() {
+        if (phraseBody == null || phraseToggle == null) return;
+        phraseBody.setVisibility(phraseExpanded ? View.VISIBLE : View.GONE);
+        phraseToggle.setText(phraseExpanded ? "접기 ▲" : "펼치기 ▼");
     }
 
     private void refreshPhrases() {
@@ -406,12 +431,16 @@ public class MainActivity extends Activity {
             count++;
             if (count < items.size()) phraseList.addView(space(6));
         }
+
+        if (phraseExpanded) {
+            warmCurrentPhrases();
+        }
     }
 
     private View buildPhraseRow(BasicPhraseStore.Phrase phrase) {
         LinearLayout row = hbox();
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(8), dp(8), dp(8), dp(8));
+        row.setPadding(dp(7), dp(7), dp(7), dp(7));
         row.setBackground(round(
                 phrase.custom ? Color.rgb(255, 253, 242) : Color.rgb(250, 253, 255),
                 13,
@@ -419,19 +448,19 @@ public class MainActivity extends Activity {
                 1
         ));
 
-        TextView star = text(phrase.favorite ? "★" : "☆", 21,
+        TextView star = text(phrase.favorite ? "★" : "☆", 20,
                 phrase.favorite ? Color.rgb(230, 160, 26) : MUTED, true);
         star.setGravity(Gravity.CENTER);
         star.setOnClickListener(v -> {
             phraseStore.toggleFavorite(phrase);
             refreshPhrases();
         });
-        row.addView(star, lp(dp(38), dp(38)));
+        row.addView(star, lp(dp(34), dp(36)));
 
         LinearLayout center = vbox();
-        center.setPadding(dp(5), 0, dp(5), 0);
+        center.setPadding(dp(4), 0, dp(4), 0);
 
-        TextView phraseText = text(phrase.text, 13, TEXT, true);
+        TextView phraseText = text(phrase.text, 12, TEXT, true);
         TextView type = text(
                 phrase.custom ? "내 문구" : "기본 문구",
                 9,
@@ -440,39 +469,90 @@ public class MainActivity extends Activity {
         );
 
         center.addView(phraseText);
-        center.addView(space(3));
+        center.addView(space(2));
         center.addView(type);
-        center.setOnClickListener(v -> selectPhrase(phrase));
         row.addView(center,
                 new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        TextView edit = pill("수정", 10, NAVY, WHITE, BORDER, 12);
-        edit.setGravity(Gravity.CENTER);
-        edit.setPadding(dp(8), dp(6), dp(8), dp(6));
-        edit.setOnClickListener(v -> showPhraseEditor(phrase));
-        row.addView(edit);
+        TextView speaker = pill("🔊", 16, NAVY, PALE_BLUE,
+                Color.rgb(203, 229, 249), 15);
+        speaker.setGravity(Gravity.CENTER);
+        row.addView(speaker, lp(dp(40), dp(38)));
+        speaker.setOnClickListener(v -> playPhraseImmediately(phrase, speaker));
 
-        TextView delete = pill("삭제", 10, RED, WHITE, Color.rgb(241, 210, 210), 12);
-        delete.setGravity(Gravity.CENTER);
-        delete.setPadding(dp(8), dp(6), dp(8), dp(6));
-        LinearLayout.LayoutParams dp = new LinearLayout.LayoutParams(
+        TextView edit = pill("수정", 9, NAVY, WHITE, BORDER, 11);
+        edit.setGravity(Gravity.CENTER);
+        edit.setPadding(dp(6), dp(5), dp(6), dp(5));
+        LinearLayout.LayoutParams ep = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
         );
-        dp.setMargins(this.dp(5), 0, 0, 0);
-        row.addView(delete, dp);
+        ep.setMargins(dp(4), 0, 0, 0);
+        row.addView(edit, ep);
+        edit.setOnClickListener(v -> showPhraseEditor(phrase));
+
+        TextView delete = pill("삭제", 9, RED, WHITE,
+                Color.rgb(241, 210, 210), 11);
+        delete.setGravity(Gravity.CENTER);
+        delete.setPadding(dp(6), dp(5), dp(6), dp(5));
+        LinearLayout.LayoutParams dpv = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        dpv.setMargins(dp(4), 0, 0, 0);
+        row.addView(delete, dpv);
         delete.setOnClickListener(v -> confirmDelete(phrase));
 
-        row.setOnClickListener(v -> selectPhrase(phrase));
+        center.setOnClickListener(v -> playPhraseImmediately(phrase, speaker));
         return row;
     }
 
-    private void selectPhrase(BasicPhraseStore.Phrase phrase) {
-        selectedPhraseText.setText(phrase.text);
-        if (translatedPhraseText != null) {
-            translatedPhraseText.setText("번역 버튼을 누르면 실제 영어 번역이 표시됩니다.");
+    private void playPhraseImmediately(BasicPhraseStore.Phrase phrase, TextView button) {
+        if (phrase == null || phrase.text == null || phrase.text.trim().isEmpty()) return;
+
+        button.setEnabled(false);
+        button.setText("…");
+
+        translationEngine.translateKoreanToEnglish(
+                phrase.text,
+                true,
+                new TranslationEngine.Callback() {
+                    @Override
+                    public void onSuccess(String translatedText) {
+                        runOnUiThread(() -> {
+                            button.setText("🔊");
+                            button.setEnabled(true);
+                        });
+                    }
+
+                    @Override
+                    public void onError(String message) {
+                        runOnUiThread(() -> {
+                            button.setText("🔊");
+                            button.setEnabled(true);
+                            Toast.makeText(
+                                    MainActivity.this,
+                                    "번역 실패: " + message,
+                                    Toast.LENGTH_LONG
+                            ).show();
+                        });
+                    }
+
+                    @Override
+                    public void onSpeechComplete() {
+                    }
+                }
+        );
+    }
+
+    private void warmCurrentPhrases() {
+        List<BasicPhraseStore.Phrase> items =
+                phraseStore.get(selectedCategory, selectedScenario, favoritesOnly);
+        ArrayList<String> texts = new ArrayList<>();
+        for (BasicPhraseStore.Phrase p : items) {
+            if (p.text != null && !p.text.trim().isEmpty()) texts.add(p.text);
         }
-        Toast.makeText(this, "문구를 선택했습니다.", Toast.LENGTH_SHORT).show();
+        translationEngine.prewarmKoreanToEnglish(texts);
     }
 
     private void showPhraseEditor(BasicPhraseStore.Phrase phrase) {
@@ -555,13 +635,6 @@ public class MainActivity extends Activity {
         TextView swap = text("⇄", 22, BLUE, true);
         swap.setGravity(Gravity.CENTER);
         swap.setBackground(round(PALE_BLUE, 21, PALE_BLUE, 0));
-        swap.setOnClickListener(v -> {
-            TextView a = (TextView) mine.getChildAt(1);
-            TextView b = (TextView) other.getChildAt(1);
-            CharSequence tmp = a.getText();
-            a.setText(b.getText());
-            b.setText(tmp);
-        });
 
         card.addView(mine,
                 new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
@@ -594,20 +667,14 @@ public class MainActivity extends Activity {
         card.setPadding(dp(11), dp(9), dp(11), dp(9));
         card.setBackground(round(WHITE, 15, BORDER, 1));
 
-        LinearLayout titleRow = hbox();
-        titleRow.setGravity(Gravity.CENTER_VERTICAL);
-
         TextView title = text("음성 출력", 13, TEXT, true);
-        TextView hint = text("  자동대화 재생 위치", 10, MUTED, false);
-        titleRow.addView(title);
-        titleRow.addView(hint);
-        card.addView(titleRow);
-        card.addView(space(7));
+        card.addView(title);
+        card.addView(space(6));
 
         LinearLayout row = hbox();
 
         TextView speaker = pill(
-                "🔊 외국어 번역음 · 스피커",
+                "🔊 한국어 → 영어",
                 11,
                 NAVY,
                 PALE_BLUE,
@@ -618,7 +685,7 @@ public class MainActivity extends Activity {
         speaker.setPadding(dp(8), dp(8), dp(8), dp(8));
 
         TextView earphone = pill(
-                "🎧 한국어 번역음 · 이어폰",
+                "🎧 영어 → 한국어",
                 11,
                 TEAL_DARK,
                 PALE_TEAL,
@@ -652,15 +719,15 @@ public class MainActivity extends Activity {
         top.setGravity(Gravity.CENTER_VERTICAL);
 
         TextView title = text("◎ 자동대화", 18, TEXT, true);
-        TextView badge = pill(
-                "● 자동 인식 ON",
+        autoBadge = pill(
+                "○ 대기",
                 10,
-                GREEN,
-                Color.rgb(237, 250, 240),
-                Color.TRANSPARENT,
+                MUTED,
+                Color.rgb(246, 248, 250),
+                BORDER,
                 15
         );
-        badge.setPadding(dp(8), dp(6), dp(8), dp(6));
+        autoBadge.setPadding(dp(8), dp(6), dp(8), dp(6));
 
         top.addView(title);
         LinearLayout.LayoutParams badgeLp = new LinearLayout.LayoutParams(
@@ -668,11 +735,11 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.WRAP_CONTENT
         );
         badgeLp.setMargins(dp(9), 0, 0, 0);
-        top.addView(badge, badgeLp);
+        top.addView(autoBadge, badgeLp);
         card.addView(top);
 
         TextView guide = text(
-                "종료할 때까지 계속 듣고 자동으로 번역·재생합니다.",
+                "시작하면 종료할 때까지 계속 듣습니다. 같은 사람이 이어서 말해도 됩니다.",
                 10,
                 MUTED,
                 false
@@ -680,47 +747,28 @@ public class MainActivity extends Activity {
         guide.setPadding(0, dp(4), 0, 0);
         card.addView(guide);
 
-        card.addView(space(9));
+        card.addView(space(8));
         card.addView(buildFlowRow());
-        card.addView(space(10));
+        card.addView(space(9));
 
-        TextView mic = text("🎙", 32, WHITE, true);
-        mic.setGravity(Gravity.CENTER);
-        mic.setBackground(round(TEAL, 43, TEAL_DARK, 1));
+        micButton = text("🎙", 29, WHITE, true);
+        micButton.setGravity(Gravity.CENTER);
+        micButton.setBackground(round(TEAL, 39, TEAL_DARK, 1));
+        micButton.setOnClickListener(v -> toggleAutoConversation());
 
         LinearLayout micHolder = hbox();
         micHolder.setGravity(Gravity.CENTER);
-        micHolder.addView(mic, lp(dp(86), dp(86)));
+        micHolder.addView(micButton, lp(dp(78), dp(78)));
         card.addView(micHolder);
 
-        card.addView(space(7));
+        card.addView(space(6));
 
-        TextView status = text("자동대화 세션 유지 중", 17, TEAL_DARK, true);
-        status.setGravity(Gravity.CENTER);
-        card.addView(status);
-
-        TextView detail = text(
-                "같은 사람이 끊었다가 다시 말해도 계속 처리합니다.",
-                11,
-                MUTED,
-                false
-        );
-        detail.setGravity(Gravity.CENTER);
-        detail.setPadding(dp(3), dp(3), dp(3), 0);
-        card.addView(detail);
-
-        TextView audio = text(
-                "🔊 외국어는 스피커  ·  🎧 한국어는 이어폰",
-                11,
-                NAVY,
-                true
-        );
-        audio.setGravity(Gravity.CENTER);
-        audio.setPadding(dp(3), dp(6), dp(3), 0);
-        card.addView(audio);
+        autoStatus = text("자동대화 대기", 16, TEAL_DARK, true);
+        autoStatus.setGravity(Gravity.CENTER);
+        card.addView(autoStatus);
 
         TextView note = text(
-                "1.8초 침묵 = 발화 조각 확정  |  세션 종료·강제 화자 전환 아님",
+                "약 1.8초 침묵 후 한 문장으로 처리하고, 재생이 끝나면 자동으로 다시 듣습니다.",
                 9,
                 Color.rgb(119, 139, 151),
                 false
@@ -728,6 +776,15 @@ public class MainActivity extends Activity {
         note.setGravity(Gravity.CENTER);
         note.setPadding(dp(3), dp(5), dp(3), 0);
         card.addView(note);
+
+        card.addView(space(8));
+
+        autoButton = text("▶ 자동대화 시작", 14, WHITE, true);
+        autoButton.setGravity(Gravity.CENTER);
+        autoButton.setPadding(dp(12), dp(11), dp(12), dp(11));
+        autoButton.setBackground(round(TEAL, 20, TEAL_DARK, 1));
+        autoButton.setOnClickListener(v -> toggleAutoConversation());
+        card.addView(autoButton);
 
         return card;
     }
@@ -737,26 +794,20 @@ public class MainActivity extends Activity {
         row.setGravity(Gravity.CENTER_VERTICAL);
 
         String[][] steps = {
-                {"🎙", "듣기"},
-                {"▤", "번역"},
-                {"🎙", "계속 듣기"},
-                {"🔊/🎧", "재생"}
+                {"🎙", "자동 듣기"},
+                {"▤", "즉시 번역"},
+                {"🔊", "음성 재생"},
+                {"↻", "다시 듣기"}
         };
 
         for (int i = 0; i < steps.length; i++) {
             LinearLayout step = vbox();
             step.setGravity(Gravity.CENTER);
 
-            TextView icon = text(
-                    steps[i][0],
-                    i == 3 ? 13 : 16,
-                    i == 3 ? BLUE : TEAL_DARK,
-                    true
-            );
+            TextView icon = text(steps[i][0], 15, TEAL_DARK, true);
             icon.setGravity(Gravity.CENTER);
-            icon.setBackground(round(PALE_TEAL, 19, PALE_TEAL, 0));
-            step.addView(icon, lp(dp(38), dp(38)));
-
+            icon.setBackground(round(PALE_TEAL, 18, PALE_TEAL, 0));
+            step.addView(icon, lp(dp(36), dp(36)));
             step.addView(space(3));
 
             TextView label = text(steps[i][1], 9, TEXT, true);
@@ -767,12 +818,155 @@ public class MainActivity extends Activity {
                     new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
             if (i < steps.length - 1) {
-                TextView arrow = text("→", 14, MUTED, false);
+                TextView arrow = text("→", 13, MUTED, false);
                 arrow.setGravity(Gravity.CENTER);
-                row.addView(arrow, lp(dp(16), dp(38)));
+                row.addView(arrow, lp(dp(14), dp(36)));
             }
         }
         return row;
+    }
+
+    private void toggleAutoConversation() {
+        if (autoConversationEngine.isActive()) {
+            autoConversationEngine.stop();
+            translationEngine.stopSpeaking();
+            updateAutoUi();
+            return;
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+                && checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            autoStartAfterPermission = true;
+            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQ_MIC);
+            return;
+        }
+
+        startAutoConversation();
+    }
+
+    private void startAutoConversation() {
+        if (!autoConversationEngine.isAvailable()) {
+            Toast.makeText(
+                    this,
+                    "이 기기에서 음성 인식 서비스를 사용할 수 없습니다.",
+                    Toast.LENGTH_LONG
+            ).show();
+            return;
+        }
+
+        translationEngine.preload();
+        autoConversationEngine.start();
+        updateAutoUi();
+    }
+
+    private void updateAutoUi() {
+        if (autoBadge == null || autoStatus == null || autoButton == null) return;
+
+        boolean active = autoConversationEngine != null && autoConversationEngine.isActive();
+
+        if (active) {
+            autoBadge.setText("● 자동 듣기 ON");
+            autoBadge.setTextColor(GREEN);
+            autoBadge.setBackground(round(
+                    Color.rgb(237, 250, 240),
+                    15,
+                    Color.TRANSPARENT,
+                    0
+            ));
+            autoStatus.setText("자동대화 유지 중 · 말씀하세요");
+            autoButton.setText("■ 자동대화 종료");
+            micButton.setAlpha(1f);
+        } else {
+            autoBadge.setText("○ 대기");
+            autoBadge.setTextColor(MUTED);
+            autoBadge.setBackground(round(
+                    Color.rgb(246, 248, 250),
+                    15,
+                    BORDER,
+                    1
+            ));
+            autoStatus.setText("자동대화 대기");
+            autoButton.setText("▶ 자동대화 시작");
+            micButton.setAlpha(0.75f);
+        }
+    }
+
+    private void handleAutoUtterance(String source, String languageTag) {
+        if (source == null || source.trim().isEmpty()) {
+            autoConversationEngine.resumeAfterProcessing();
+            return;
+        }
+
+        final boolean korean = isKorean(languageTag, source);
+
+        runOnUiThread(() -> {
+            autoStatus.setText("번역 중 · " + source);
+            if (korean) {
+                mySourceText.setText(source);
+                myTranslatedText.setText("번역 중...");
+            } else {
+                otherSourceText.setText(source);
+                otherTranslatedText.setText("번역 중...");
+            }
+        });
+
+        TranslationEngine.Callback callback = new TranslationEngine.Callback() {
+            @Override
+            public void onSuccess(String translatedText) {
+                runOnUiThread(() -> {
+                    if (korean) {
+                        myTranslatedText.setText(translatedText);
+                    } else {
+                        otherTranslatedText.setText(translatedText);
+                    }
+                    autoStatus.setText("음성 재생 중");
+                });
+            }
+
+            @Override
+            public void onError(String message) {
+                runOnUiThread(() -> {
+                    if (korean) {
+                        myTranslatedText.setText("번역 실패: " + message);
+                    } else {
+                        otherTranslatedText.setText("번역 실패: " + message);
+                    }
+                    autoStatus.setText("자동대화 유지 중 · 다시 듣기");
+                });
+                autoConversationEngine.resumeAfterProcessing();
+            }
+
+            @Override
+            public void onSpeechComplete() {
+                runOnUiThread(() -> {
+                    if (autoConversationEngine.isActive()) {
+                        autoStatus.setText("자동대화 유지 중 · 말씀하세요");
+                    }
+                });
+                autoConversationEngine.resumeAfterProcessing();
+            }
+        };
+
+        if (korean) {
+            translationEngine.translateKoreanToEnglish(source, true, callback);
+        } else {
+            translationEngine.translateEnglishToKorean(source, true, callback);
+        }
+    }
+
+    private boolean isKorean(String languageTag, String textValue) {
+        if (languageTag != null) {
+            String lower = languageTag.toLowerCase();
+            if (lower.startsWith("ko")) return true;
+            if (lower.startsWith("en")) return false;
+        }
+
+        for (int i = 0; i < textValue.length(); i++) {
+            char c = textValue.charAt(i);
+            if (c >= '\uAC00' && c <= '\uD7A3') return true;
+        }
+        return false;
     }
 
     private View buildMySpeechCard() {
@@ -780,40 +974,17 @@ public class MainActivity extends Activity {
         card.setPadding(dp(12), dp(10), dp(12), dp(10));
         card.setBackground(round(PALE_BLUE, 16, Color.rgb(203, 229, 249), 1));
 
-        LinearLayout head = hbox();
-        head.setGravity(Gravity.CENTER_VERTICAL);
-
-        TextView who = text("● 내 말  ·  한국어", 12, BLUE, true);
-        TextView time = text("09:41", 10, MUTED, false);
-
-        head.addView(who,
-                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        head.addView(time);
-        card.addView(head);
-
+        TextView who = text("● 내 말 · 한국어 → 영어", 12, BLUE, true);
+        card.addView(who);
         card.addView(space(6));
-        card.addView(text("이 메뉴는 맵지 않게 해주세요.", 15, TEXT, true));
+
+        mySourceText = text("자동대화를 시작하고 한국어로 말해보세요.", 14, TEXT, true);
+        card.addView(mySourceText);
         card.addView(space(5));
-        card.addView(text(
-                "Please make this dish not spicy.",
-                13,
-                Color.rgb(52, 87, 119),
-                false
-        ));
-        card.addView(space(7));
 
-        TextView speaker = pill(
-                "🔊 스피커로 듣기",
-                11,
-                NAVY,
-                WHITE,
-                BORDER,
-                15
-        );
-        speaker.setGravity(Gravity.CENTER);
-        speaker.setPadding(dp(10), dp(7), dp(10), dp(7));
-        card.addView(speaker);
-
+        myTranslatedText = text("영어 번역이 여기에 표시됩니다.", 12,
+                Color.rgb(52, 87, 119), false);
+        card.addView(myTranslatedText);
         return card;
     }
 
@@ -822,76 +993,18 @@ public class MainActivity extends Activity {
         card.setPadding(dp(12), dp(10), dp(12), dp(10));
         card.setBackground(round(PALE_GREEN, 16, Color.rgb(205, 236, 213), 1));
 
-        LinearLayout head = hbox();
-        head.setGravity(Gravity.CENTER_VERTICAL);
-
-        TextView who = text("● 상대방 말  ·  영어", 12, GREEN, true);
-        TextView time = text("09:42", 10, MUTED, false);
-
-        head.addView(who,
-                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        head.addView(time);
-        card.addView(head);
-
+        TextView who = text("● 상대방 말 · 영어 → 한국어", 12, GREEN, true);
+        card.addView(who);
         card.addView(space(6));
-        card.addView(text(
-                "Would you like anything to drink?",
-                15,
-                TEXT,
-                true
-        ));
+
+        otherSourceText = text("상대방이 영어로 말하면 자동으로 인식합니다.", 14, TEXT, true);
+        card.addView(otherSourceText);
         card.addView(space(5));
-        card.addView(text(
-                "마실 것은 무엇으로 드릴까요?",
-                13,
-                Color.rgb(52, 87, 119),
-                false
-        ));
-        card.addView(space(7));
 
-        TextView earphone = pill(
-                "🎧 이어폰으로 듣기",
-                11,
-                TEAL_DARK,
-                WHITE,
-                Color.rgb(194, 231, 231),
-                15
-        );
-        earphone.setGravity(Gravity.CENTER);
-        earphone.setPadding(dp(10), dp(7), dp(10), dp(7));
-        card.addView(earphone);
-
+        otherTranslatedText = text("한국어 번역이 여기에 표시됩니다.", 12,
+                Color.rgb(52, 87, 119), false);
+        card.addView(otherTranslatedText);
         return card;
-    }
-
-    private View buildProgressButton() {
-        TextView button = text("■  자동대화 종료", 15, WHITE, true);
-        button.setGravity(Gravity.CENTER);
-        button.setPadding(dp(12), dp(12), dp(12), dp(12));
-        button.setBackground(round(TEAL, 21, TEAL_DARK, 1));
-        return button;
-    }
-
-    private View buildManualButtons() {
-        LinearLayout row = hbox();
-
-        TextView left = pill("🎙 내가 말하기", 12, NAVY, WHITE, BORDER, 19);
-        TextView right = pill("🎧 이어폰 듣기", 12, NAVY, WHITE, BORDER, 19);
-
-        left.setGravity(Gravity.CENTER);
-        right.setGravity(Gravity.CENTER);
-
-        LinearLayout.LayoutParams p1 =
-                new LinearLayout.LayoutParams(0, dp(44), 1f);
-        p1.setMargins(0, 0, dp(4), 0);
-
-        LinearLayout.LayoutParams p2 =
-                new LinearLayout.LayoutParams(0, dp(44), 1f);
-        p2.setMargins(dp(4), 0, 0, 0);
-
-        row.addView(left, p1);
-        row.addView(right, p2);
-        return row;
     }
 
     private View buildBottomNav() {
@@ -982,7 +1095,36 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    public void onRequestPermissionsResult(
+            int requestCode,
+            String[] permissions,
+            int[] grantResults
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+
+        if (requestCode == REQ_MIC) {
+            boolean granted = grantResults.length > 0
+                    && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+
+            if (granted && autoStartAfterPermission) {
+                autoStartAfterPermission = false;
+                startAutoConversation();
+            } else {
+                autoStartAfterPermission = false;
+                Toast.makeText(
+                        this,
+                        "자동대화를 사용하려면 마이크 권한이 필요합니다.",
+                        Toast.LENGTH_LONG
+                ).show();
+            }
+        }
+    }
+
+    @Override
     protected void onDestroy() {
+        if (autoConversationEngine != null) {
+            autoConversationEngine.destroy();
+        }
         if (translationEngine != null) {
             translationEngine.close();
         }
