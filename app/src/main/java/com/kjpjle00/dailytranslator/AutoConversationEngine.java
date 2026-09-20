@@ -53,6 +53,9 @@ public class AutoConversationEngine {
     private boolean playbackPaused;
     // A failed CURRENT detection can request one retry. This is not a speaker lock.
     private String retryLanguage;
+    // Soft turn hint only: after A -> B translation, the next recognizer starts in B,
+    // while Android language detection/switch still allows both selected languages.
+    private String nextInitialLanguageTag;
     private String playbackText;
     private long playbackEndedAt = -10000L;
 
@@ -61,6 +64,8 @@ public class AutoConversationEngine {
         final long id;
         SpeechRecognizer recognizer;
         String speechCode;
+        int speechConfidence = SpeechRecognizer.LANGUAGE_DETECTION_CONFIDENCE_LEVEL_UNKNOWN;
+        String initialCode;
         boolean conflictingSpeech;
         boolean switchFailed;
         boolean finalReceived;
@@ -85,6 +90,7 @@ public class AutoConversationEngine {
             if (first != null) firstLanguage = first;
             if (second != null) secondLanguage = second;
             playbackText = null;
+            nextInitialLanguageTag = firstLanguage.speechTag;
             lastModelRequest = -30000L;
             downloading.clear();
             releaseModelRecognizer();
@@ -101,6 +107,8 @@ public class AutoConversationEngine {
         generation++;
         active = true;
         processing = false;
+        retryLanguage = null;
+        nextInitialLanguageTag = firstLanguage.speechTag;
         prepareSpeechModels();
         startListeningNow();
     }
@@ -171,8 +179,18 @@ public class AutoConversationEngine {
         try {
             request.recognizer = SpeechRecognizer.createSpeechRecognizer(context);
             request.recognizer.setRecognitionListener(listenerFor(request));
-            String initial = retryLanguage == null ? firstLanguage.speechTag : retryLanguage;
+
+            String initial;
+            if (retryLanguage != null) {
+                initial = retryLanguage;
+            } else if (nextInitialLanguageTag != null) {
+                initial = nextInitialLanguageTag;
+            } else {
+                initial = firstLanguage.speechTag;
+            }
+
             retryLanguage = null;
+            request.initialCode = LanguageDecisionEngine.code(initial);
             request.recognizer.startListening(recognizerIntent(initial));
         } catch (Exception e) {
             if (owns(request)) {
@@ -203,24 +221,57 @@ public class AutoConversationEngine {
 
             @Override public void onLanguageDetection(Bundle results) {
                 if (!acceptsAudio(request) || results == null || Build.VERSION.SDK_INT < 34) return;
-                String code = LanguageDecisionEngine.code(results.getString(SpeechRecognizer.DETECTED_LANGUAGE));
-                int confidence = results.getInt(SpeechRecognizer.LANGUAGE_DETECTION_CONFIDENCE_LEVEL,
-                        SpeechRecognizer.LANGUAGE_DETECTION_CONFIDENCE_LEVEL_UNKNOWN);
-                int switched = results.getInt(SpeechRecognizer.LANGUAGE_SWITCH_RESULT,
-                        SpeechRecognizer.LANGUAGE_SWITCH_RESULT_NOT_ATTEMPTED);
-                if (switched == SpeechRecognizer.LANGUAGE_SWITCH_RESULT_FAILED
+
+                String code = LanguageDecisionEngine.code(
+                        results.getString(SpeechRecognizer.DETECTED_LANGUAGE)
+                );
+                int confidence = results.getInt(
+                        SpeechRecognizer.LANGUAGE_DETECTION_CONFIDENCE_LEVEL,
+                        SpeechRecognizer.LANGUAGE_DETECTION_CONFIDENCE_LEVEL_UNKNOWN
+                );
+                int switched = results.getInt(
+                        SpeechRecognizer.LANGUAGE_SWITCH_RESULT,
+                        SpeechRecognizer.LANGUAGE_SWITCH_RESULT_NOT_ATTEMPTED
+                );
+
+                if (switched == SpeechRecognizer.LANGUAGE_SWITCH_RESULT_SUCCEEDED) {
+                    request.switchFailed = false;
+                } else if (switched == SpeechRecognizer.LANGUAGE_SWITCH_RESULT_FAILED
                         || switched == SpeechRecognizer.LANGUAGE_SWITCH_RESULT_SKIPPED_NO_MODEL) {
                     request.switchFailed = true;
                     if (switched == SpeechRecognizer.LANGUAGE_SWITCH_RESULT_SKIPPED_NO_MODEL
-                            && tagFor(code) != null) missingModels.add(code);
+                            && tagFor(code) != null) {
+                        missingModels.add(code);
+                    }
                     prepareSpeechModels();
                 }
-                // Keep a complete observation. Never combine an old tag with a new score.
-                if (code != null && confidence >= SpeechRecognizer.LANGUAGE_DETECTION_CONFIDENCE_LEVEL_CONFIDENT) {
-                    if (request.speechCode != null && !request.speechCode.equals(code)) {
+
+                // v0.10:
+                // QUICK_RESPONSE itself may switch from NOT_CONFIDENT(level 1).
+                // Do not throw that evidence away. Keep the strongest observation.
+                if (code != null
+                        && tagFor(code) != null
+                        && confidence
+                        >= SpeechRecognizer.LANGUAGE_DETECTION_CONFIDENCE_LEVEL_NOT_CONFIDENT) {
+
+                    if (request.speechCode != null
+                            && !request.speechCode.equals(code)
+                            && request.speechConfidence
+                            >= SpeechRecognizer.LANGUAGE_DETECTION_CONFIDENCE_LEVEL_CONFIDENT
+                            && confidence
+                            >= SpeechRecognizer.LANGUAGE_DETECTION_CONFIDENCE_LEVEL_CONFIDENT) {
                         request.conflictingSpeech = true;
                     }
-                    request.speechCode = code;
+
+                    if (request.speechCode == null
+                            || code.equals(request.speechCode)
+                            || confidence >= request.speechConfidence) {
+                        request.speechCode = code;
+                        request.speechConfidence = Math.max(
+                                request.speechConfidence,
+                                confidence
+                        );
+                    }
                 }
             }
 
@@ -277,9 +328,18 @@ public class AutoConversationEngine {
         if (request.languageTimeout != null) handler.removeCallbacks(request.languageTimeout);
 
         // v0.9: 모델 다운로드 상태 때문에 이미 얻은 음성인식 결과를 버리지 않는다.
-        LanguageDecisionEngine.Decision decision = LanguageDecisionEngine.decide(raw,
-                firstLanguage.code, secondLanguage.code, request.speechCode,
-                request.conflictingSpeech, request.switchFailed, score, evidence);
+        LanguageDecisionEngine.Decision decision = LanguageDecisionEngine.decide(
+                raw,
+                firstLanguage.code,
+                secondLanguage.code,
+                request.speechCode,
+                request.speechConfidence,
+                request.initialCode,
+                request.conflictingSpeech,
+                request.switchFailed,
+                score,
+                evidence
+        );
         Log.d("DailyLanguage", "request=" + request.id + " reason=" + decision.reason
                 + " source=" + decision.sourceCode); // No transcripts/recordings in logs.
         if (!decision.confirmed()) {
@@ -290,6 +350,18 @@ public class AutoConversationEngine {
             return;
         }
         String tag = tagFor(decision.sourceCode);
+
+        // v0.10 soft-turn priming:
+        // Korean -> Chinese playback means the next recognizer starts in Chinese.
+        // Chinese -> Korean playback means the next recognizer starts in Korean.
+        // This is NOT a forced turn: both languages remain enabled for auto switch.
+        if (firstLanguage.code.equals(decision.sourceCode)) {
+            nextInitialLanguageTag = secondLanguage.speechTag;
+        } else if (secondLanguage.code.equals(decision.sourceCode)) {
+            nextInitialLanguageTag = firstLanguage.speechTag;
+        }
+        retryLanguage = null;
+
         retireRequest();
         // processing stays true until translation/playback completion.
         if (tag != null && listener != null) listener.onUtterance(decision.text, tag);
@@ -336,12 +408,44 @@ public class AutoConversationEngine {
         intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
         intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1800L);
         intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1100L);
+        if (Build.VERSION.SDK_INT >= 33) {
+            ArrayList<String> biases = recognitionBiases();
+            if (!biases.isEmpty()) {
+                intent.putStringArrayListExtra(
+                        RecognizerIntent.EXTRA_BIASING_STRINGS,
+                        biases
+                );
+            }
+        }
+
         if (Build.VERSION.SDK_INT >= 34) {
-            ArrayList<String> pair = new ArrayList<>(Arrays.asList(firstLanguage.speechTag, secondLanguage.speechTag));
+            ArrayList<String> pair = new ArrayList<>(
+                    Arrays.asList(firstLanguage.speechTag, secondLanguage.speechTag)
+            );
             intent.putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_DETECTION, true);
-            intent.putStringArrayListExtra(RecognizerIntent.EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES, pair);
-            intent.putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_SWITCH, RecognizerIntent.LANGUAGE_SWITCH_QUICK_RESPONSE);
-            intent.putStringArrayListExtra(RecognizerIntent.EXTRA_LANGUAGE_SWITCH_ALLOWED_LANGUAGES, pair);
+            intent.putStringArrayListExtra(
+                    RecognizerIntent.EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES,
+                    pair
+            );
+            intent.putExtra(
+                    RecognizerIntent.EXTRA_ENABLE_LANGUAGE_SWITCH,
+                    RecognizerIntent.LANGUAGE_SWITCH_QUICK_RESPONSE
+            );
+            intent.putStringArrayListExtra(
+                    RecognizerIntent.EXTRA_LANGUAGE_SWITCH_ALLOWED_LANGUAGES,
+                    pair
+            );
+
+            if (Build.VERSION.SDK_INT >= 35) {
+                intent.putExtra(
+                        RecognizerIntent.EXTRA_LANGUAGE_SWITCH_INITIAL_ACTIVE_DURATION_TIME_MILLIS,
+                        12000
+                );
+                intent.putExtra(
+                        RecognizerIntent.EXTRA_LANGUAGE_SWITCH_MAX_SWITCHES,
+                        2
+                );
+            }
         }
         return intent;
     }
@@ -352,6 +456,65 @@ public class AutoConversationEngine {
         intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, tag);
         intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5);
         return intent;
+    }
+
+    private ArrayList<String> recognitionBiases() {
+        ArrayList<String> result = new ArrayList<>();
+
+        for (AppLanguage language : new AppLanguage[]{firstLanguage, secondLanguage}) {
+            if (language == null) continue;
+
+            switch (language.code) {
+                case "ko":
+                    result.add("안녕하세요");
+                    result.add("감사합니다");
+                    result.add("잠시만요");
+                    result.add("괜찮아요");
+                    break;
+                case "zh":
+                    result.add("你好");
+                    result.add("谢谢");
+                    result.add("再见");
+                    result.add("中国");
+                    result.add("多少钱");
+                    result.add("对不起");
+                    break;
+                case "ja":
+                    result.add("こんにちは");
+                    result.add("ありがとう");
+                    result.add("すみません");
+                    result.add("さようなら");
+                    break;
+                case "en":
+                    result.add("Hello");
+                    result.add("Good morning");
+                    result.add("Thank you");
+                    result.add("Excuse me");
+                    break;
+                case "th":
+                    result.add("สวัสดีครับ");
+                    result.add("สวัสดีค่ะ");
+                    result.add("ขอบคุณ");
+                    break;
+                case "es":
+                    result.add("Hola");
+                    result.add("Gracias");
+                    result.add("Buenos días");
+                    break;
+                case "vi":
+                    result.add("Xin chào");
+                    result.add("Cảm ơn");
+                    break;
+                case "tl":
+                    result.add("Kumusta");
+                    result.add("Salamat");
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        return result;
     }
 
     public void prepareSpeechModels() {

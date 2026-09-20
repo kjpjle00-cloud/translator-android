@@ -40,13 +40,23 @@ public final class LanguageDecisionEngine {
         return -1;
     }
 
-    public static Decision decide(String raw, String first, String second,
-            String confidentSpeechLanguage, boolean conflictingSpeechLanguages,
-            boolean switchFailed, float recognitionConfidence, List<TextEvidence> textEvidence) {
+    public static Decision decide(
+            String raw,
+            String first,
+            String second,
+            String detectedSpeechLanguage,
+            int speechConfidenceLevel,
+            String initialLanguage,
+            boolean conflictingSpeechLanguages,
+            boolean switchFailed,
+            float recognitionConfidence,
+            List<TextEvidence> textEvidence
+    ) {
         String text = raw == null ? "" : raw.trim();
         first = code(first);
         second = code(second);
-        String speech = code(confidentSpeechLanguage);
+        String speech = code(detectedSpeechLanguage);
+        String initial = code(initialLanguage);
 
         if (first == null || second == null || first.equals(second)) {
             return hold(text, "invalid_pair");
@@ -58,79 +68,135 @@ public final class LanguageDecisionEngine {
         }
         if (letterCount(text) == 0) return hold(text, "no_language_evidence");
 
-        // v0.9: 선택한 두 언어 중 오직 한쪽에만 해당하는 대표 음차는
-        // 잘못된 한글 전사라도 그 외국어로 복원한다.
-        String restoredFirst = restoreGreeting(text, first);
-        String restoredSecond = restoreGreeting(text, second);
+        // First recover very common foreign phrases that a wrong primary ASR model
+        // can spell phonetically in Korean/Latin text.
+        String restoredFirst = restorePhoneticText(text, first);
+        String restoredSecond = restorePhoneticText(text, second);
+
         if (restoredFirst != null && restoredSecond == null) {
-            return confirm(text, restoredFirst, first, "pair_selected_phonetic_greeting");
+            return confirm(text, restoredFirst, first, "pair_selected_phonetic_phrase");
         }
         if (restoredSecond != null && restoredFirst == null) {
-            return confirm(text, restoredSecond, second, "pair_selected_phonetic_greeting");
+            return confirm(text, restoredSecond, second, "pair_selected_phonetic_phrase");
         }
 
         String script = dominantNativeLanguage(text, first, second);
         String textLanguage = confidentTextLanguage(textEvidence);
 
-        if (speech != null) {
-            String restored = restoreGreeting(text, speech);
-            if (restored != null) {
-                return confirm(text, restored, speech, "audio_supported_greeting");
-            }
+        boolean speechConfident = speech != null
+                && speechConfidenceLevel >= 2;
+        boolean speechWeak = speech != null
+                && speechConfidenceLevel >= 1;
 
-            // 명확한 문자와 음성 태그가 충돌하면 억지 번역하지 않는다.
+        if (speechConfident) {
             if (script != null && !script.equals(speech)) {
-                return hold(text, "audio_script_conflict");
+                // If a recognizer says "Chinese" but returns Hangul, do not relabel it
+                // as Korean. That is usually wrong-model transcription.
+                return hold(text, "confident_audio_script_conflict");
             }
 
-            // ML Kit 텍스트 판정은 보조 증거다. 명확한 음성 태그가 있으면
-            // 짧은 문장에서 텍스트 판정 하나만으로 차단하지 않는다.
             if (textLanguage != null
                     && !textLanguage.equals(speech)
                     && script == null) {
-                return hold(text, "audio_text_conflict");
+                return hold(text, "confident_audio_text_conflict");
             }
 
-            if (!scriptCompatible(text, speech)) {
-                return hold(text, "wrong_transcription_script");
+            if (script != null && script.equals(speech)) {
+                return confirm(text, text, speech, "confident_audio_and_script");
             }
-            return confirm(text, text, speech,
-                    switchFailed ? "current_audio_evidence_despite_switch_failure"
-                            : "current_audio_evidence");
+
+            if (isLatin(speech) && textLanguage != null && textLanguage.equals(speech)) {
+                return confirm(text, text, speech, "confident_audio_and_text");
+            }
+
+            if (scriptCompatible(text, speech)) {
+                return confirm(text, text, speech, "confident_audio_evidence");
+            }
         }
 
-        // v0.9: 한국어/중국어/일본어/태국어/러시아어/아랍어/힌디어처럼
-        // 문자가 분명한 경우 ML Kit 언어 ID가 늦거나 없더라도 바로 확정한다.
+        if (speechWeak) {
+            // QUICK_RESPONSE can legitimately return level 1 (NOT_CONFIDENT).
+            // Use it as a soft clue, especially when it agrees with the language
+            // that the current recognizer was primed to hear.
+            if (script != null && script.equals(speech)) {
+                return confirm(text, text, speech, "weak_audio_matches_script");
+            }
+
+            if (textLanguage != null && textLanguage.equals(speech)) {
+                return confirm(text, text, speech, "weak_audio_matches_text");
+            }
+
+            if (initial != null
+                    && initial.equals(speech)
+                    && script == null
+                    && isLatin(speech)) {
+                return confirm(text, text, speech, "weak_audio_matches_primary_latin");
+            }
+
+            if (script != null && !script.equals(speech)) {
+                // Important: do NOT silently call this Korean just because a Chinese
+                // utterance was rendered in Hangul. Hold instead of translating wrong.
+                return hold(text, "weak_audio_script_conflict");
+            }
+        }
+
         if (script != null) {
-            if (recognitionConfidence >= 0f && recognitionConfidence < 0.20f) {
+            // Turn-aware protection for Korean + foreign-language pairs:
+            // when the current recognizer was deliberately primed for the foreign
+            // language but returned Hangul without any language callback, only accept
+            // it as Korean when it looks like actual Korean rather than phonetic noise.
+            if ("ko".equals(script)
+                    && initial != null
+                    && !"ko".equals(initial)
+                    && inPair("ko", first, second)
+                    && !looksLikeNativeKorean(text)) {
+                return hold(text, "hangul_after_foreign_primary_is_ambiguous");
+            }
+
+            if (recognitionConfidence >= 0f && recognitionConfidence < 0.15f) {
                 return hold(text, "very_low_recognition_confidence");
             }
-            return confirm(text, text, script,
-                    switchFailed ? "native_script_despite_switch_failure"
-                            : "native_script_evidence");
+
+            return confirm(
+                    text,
+                    text,
+                    script,
+                    switchFailed
+                            ? "native_script_despite_switch_failure"
+                            : "native_script_evidence"
+            );
         }
 
-        // 자동 언어전환 실패 자체만으로 모든 결과를 폐기하지 않는다.
-        // 현재 발화에서 다른 증거도 전혀 없을 때만 보류한다.
         if (textLanguage == null || !inPair(textLanguage, first, second)) {
             if (switchFailed) return hold(text, "switch_failed_without_other_evidence");
-            return hold(text,
-                    textLanguage == null ? "uncertain_text_language" : "text_outside_pair");
+            return hold(
+                    text,
+                    textLanguage == null
+                            ? "uncertain_text_language"
+                            : "text_outside_pair"
+            );
         }
 
-        if (recognitionConfidence >= 0f && recognitionConfidence < 0.25f) {
+        if (recognitionConfidence >= 0f && recognitionConfidence < 0.20f) {
             return hold(text, "very_low_recognition_confidence");
         }
+
+        if (isLatin(textLanguage)) {
+            return confirm(
+                    text,
+                    text,
+                    textLanguage,
+                    switchFailed
+                            ? "latin_text_evidence_despite_switch_failure"
+                            : "latin_text_evidence"
+            );
+        }
+
         if (!scriptCompatible(text, textLanguage)) {
             return hold(text, "wrong_transcription_script");
         }
-        if (letterCount(text) < 3 && !isShortReply(text, textLanguage)) {
-            return hold(text, "short_text_needs_more_evidence");
-        }
 
-        return confirm(text, text, textLanguage,
-                switchFailed ? "text_evidence_despite_switch_failure"
-                        : "current_text_evidence");
+        return confirm(text, text, textLanguage, "current_text_evidence");
     }
 
     private static String confidentTextLanguage(List<TextEvidence> evidence) {
@@ -233,35 +299,92 @@ public final class LanguageDecisionEngine {
         return false;
     }
 
-    private static String restoreGreeting(String text, String language) {
+    private static boolean looksLikeNativeKorean(String text) {
+        String value = key(text);
+        if (value.isEmpty()) return false;
+
+        // Common Korean endings/particles and frequent standalone replies.
+        String[] cues = {
+                "안녕하세요", "감사합니다", "괜찮아요", "괜찮습니다",
+                "주세요", "해요", "해줘", "합니다", "입니다", "있어요", "없어요",
+                "예요", "이에요", "나요", "까요", "네요", "거예요",
+                "맞아요", "아니요", "네", "예", "잠시만", "어디", "얼마",
+                "뭐", "무엇", "왜", "오늘", "내일"
+        };
+        for (String cue : cues) {
+            if (value.contains(key(cue))) return true;
+        }
+
+        // Longer Hangul text with ordinary Korean sentence endings is likely native Korean.
+        return value.length() >= 6
+                && (value.endsWith("요")
+                || value.endsWith("다")
+                || value.endsWith("죠")
+                || value.endsWith("까"));
+    }
+
+    private static String restorePhoneticText(String text, String language) {
         if (language == null) return null;
         String value = key(text);
+
         switch (language) {
             case "ja":
-                if (value.equals("곤니치와") || value.equals("곤니찌와") || value.equals("콘니치와")
-                        || value.equals("콘니찌와") || value.equals("konnichiwa")) return "こんにちは";
+                if (value.equals("곤니치와") || value.equals("곤니찌와")
+                        || value.equals("콘니치와") || value.equals("콘니찌와")
+                        || value.equals("konnichiwa")) return "こんにちは";
                 if (value.equals("사요나라") || value.equals("sayonara")) return "さようなら";
-                if (value.equals("아리가토") || value.equals("아리가또") || value.equals("arigato")) return "ありがとう";
+                if (value.equals("아리가토") || value.equals("아리가또")
+                        || value.equals("arigato")) return "ありがとう";
                 if (value.equals("스미마센") || value.equals("sumimasen")) return "すみません";
                 if (value.equals("오하요") || value.equals("ohayo")) return "おはよう";
+                if (value.equals("오하요고자이마스")
+                        || value.equals("ohayougozaimasu")) return "おはようございます";
                 break;
+
             case "en":
                 if (value.equals("헬로") || value.equals("헬로우")) return "Hello";
                 if (value.equals("굿모닝")) return "Good morning";
                 if (value.equals("땡큐") || value.equals("쌩큐")) return "Thank you";
                 if (value.equals("굿나잇")) return "Good night";
+                if (value.equals("하와유")) return "How are you";
                 break;
+
             case "zh":
                 if (value.equals("니하오") || value.equals("nihao")) return "你好";
-                if (value.equals("셰셰") || value.equals("시에시에") || value.equals("xiexie")) return "谢谢";
-                if (value.equals("짜이찌엔") || value.equals("짜이젠") || value.equals("zaijian")) return "再见";
+                if (value.equals("니하오마") || value.equals("nihaoma")) return "你好吗";
+                if (value.equals("셰셰") || value.equals("쎼쎼")
+                        || value.equals("시에시에") || value.equals("xiexie")) return "谢谢";
+                if (value.equals("짜이찌엔") || value.equals("짜이젠")
+                        || value.equals("zaijian")) return "再见";
+                if (value.equals("중궈") || value.equals("zhongguo")) return "中国";
+                if (value.equals("중궈니하오")
+                        || value.equals("zhongguonihao")) return "中国你好";
+                if (value.equals("워아이니") || value.equals("woaini")) return "我爱你";
+                if (value.equals("두이부치") || value.equals("duibuqi")) return "对不起";
+                if (value.equals("부커치") || value.equals("뿌커치")
+                        || value.equals("bukeqi")) return "不客气";
+                if (value.equals("뚜어샤오첸")
+                        || value.equals("duoshaoqian")) return "多少钱";
                 break;
+
             case "th":
-                if (value.equals("사와디캅") || value.equals("sawadeekrap")) return "สวัสดีครับ";
-                if (value.equals("사와디카") || value.equals("sawadeeka")) return "สวัสดีค่ะ";
+                if (value.equals("사와디캅")
+                        || value.equals("sawadeekrap")) return "สวัสดีครับ";
+                if (value.equals("사와디카")
+                        || value.equals("sawadeeka")) return "สวัสดีค่ะ";
+                if (value.equals("컵쿤캅")) return "ขอบคุณครับ";
+                if (value.equals("컵쿤카")) return "ขอบคุณค่ะ";
                 break;
-            default: break;
+
+            case "es":
+                if (value.equals("올라") || value.equals("hola")) return "Hola";
+                if (value.equals("그라시아스") || value.equals("gracias")) return "Gracias";
+                break;
+
+            default:
+                break;
         }
+
         return null;
     }
 }
