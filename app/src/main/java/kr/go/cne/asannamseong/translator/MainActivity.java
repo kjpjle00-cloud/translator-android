@@ -134,7 +134,7 @@ public class MainActivity extends Activity {
                 if (url.startsWith(APP_URL)) injectNativeBridgeJs();
             }
         });
-        webView.loadUrl(APP_URL + "?native=1.0-test2b1-auto28");
+        webView.loadUrl(APP_URL + "?native=1.0-test2b1-auto29");
     }
 
     private void initTts() {
@@ -618,7 +618,7 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public String appVersion() { return "1.0-test2b1-auto28"; }
+        public String appVersion() { return "1.0-test2b1-auto29"; }
     }
 
     @Override
