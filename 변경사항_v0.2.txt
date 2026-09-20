@@ -1,9 +1,0 @@
-v0.2 변경사항
-- v0.1 이어폰 출력 시험판에 기존 웹 통역기 전체 기능을 통합 기준으로 명시
-- 현재 웹앱 URL translator-942.pages.dev를 계속 사용하도록 유지
-- 이어폰 분리모드 ON/OFF 전환 버튼 추가
-- 이어폰 연결/해제 상태 실시간 감지(AudioDeviceCallback)
-- 한국어 TTS만 이어폰으로, 외국어 TTS는 휴대폰 스피커로 출력
-- 이어폰 분리모드 OFF 시 모든 TTS를 휴대폰 스피커로 출력
-- web-reference-v6.8.7 소스 참고본 포함
-- Android 앱 versionCode 2 / versionName 0.2-integrated-earphone
