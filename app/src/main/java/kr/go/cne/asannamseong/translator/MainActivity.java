@@ -134,7 +134,7 @@ public class MainActivity extends Activity {
                 if (url.startsWith(APP_URL)) injectNativeBridgeJs();
             }
         });
-        webView.loadUrl(APP_URL + "?native=1.0-test2b1-auto25");
+        webView.loadUrl(APP_URL + "?native=1.0-test2b1-auto26");
     }
 
     private void initTts() {
@@ -618,7 +618,7 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public String appVersion() { return "1.0-test2b1-auto25"; }
+        public String appVersion() { return "1.0-test2b1-auto26"; }
     }
 
     @Override
@@ -1218,7 +1218,7 @@ public class MainActivity extends Activity {
     return normalizeRecognitionContext(window.__recognitionContext);
   };
 
-  // AUTO25: 번역/TTS/이어폰 엔진은 그대로 두고 보이는 자동대화 화면만 교체한다.
+  // AUTO26: 번역/TTS/이어폰 엔진은 그대로 두고 보이는 자동대화 화면만 교체한다.
   const SCENARIO_MODE_KEY='ans_usage_mode_v2';
   const SCENARIO_DETAIL_KEY='ans_usage_detail_v2';
   const SCENARIO_DEFS={
@@ -1246,13 +1246,12 @@ public class MainActivity extends Activity {
       body[data-page="conversation"] #speechView,
       body[data-page="conversation"] #dynamicView{display:none!important}
       body[data-page="conversation"] main{padding-bottom:12px!important}
-      #nativeScenarioPanel,#nativePhrasePanel,#nativeAutoPanel,#nativeLivePanel{display:none}
+      #nativeScenarioPanel,#nativePhrasePanel,#nativeAutoPanel{display:none}
       body[data-page="conversation"] #nativeScenarioPanel,
       body[data-page="conversation"] #nativePhrasePanel,
-      body[data-page="conversation"] #nativeAutoPanel,
-      body[data-page="conversation"] #nativeLivePanel{display:block!important}
-      body[data-page="conversation"] #nativeLivePanel ~ *{display:none!important}
-      #nativeScenarioPanel,#nativePhrasePanel,#nativeAutoPanel,#nativeLivePanel{max-width:1180px;margin:6px auto;padding:0 10px;box-sizing:border-box}
+      body[data-page="conversation"] #nativeAutoPanel{display:block!important}
+      body[data-page="conversation"] #nativeAutoPanel ~ *{display:none!important}
+      #nativeScenarioPanel,#nativePhrasePanel,#nativeAutoPanel{max-width:1180px;margin:6px auto;padding:0 10px;box-sizing:border-box}
       .native-card{background:#fff;border:1px solid #dce8ee;border-radius:16px;padding:10px;box-shadow:0 5px 18px rgba(21,54,79,.06)}
       .native-mode-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}
       .native-mode-btn{border:1px solid #d9e5eb;background:#f8fbfc;color:#21405a;border-radius:13px;padding:10px 4px;font-size:15px;font-weight:800;min-height:43px;white-space:nowrap}
@@ -1272,19 +1271,20 @@ public class MainActivity extends Activity {
       .native-auto-main{width:100%;border:0;border-radius:14px;padding:13px 12px;background:linear-gradient(135deg,#0c9a9a,#1486a7);color:#fff;font-size:17px;font-weight:900;box-shadow:0 6px 16px rgba(13,145,157,.22)}
       .native-auto-main.active{background:linear-gradient(135deg,#0f6f76,#0b617e)}
       .native-auto-help{font-size:12px;color:#728694;text-align:center;margin-top:7px;line-height:1.45}
-      .native-live-grid{display:grid;grid-template-columns:1fr;gap:8px}
-      .native-live-turn{border:1px solid #dce8ee;border-radius:14px;padding:10px;background:#fbfdfe;min-width:0}
-      .native-live-turn.active{border-color:#8fd4ce;background:#f4fcfb;box-shadow:0 0 0 2px rgba(12,154,154,.06)}
-      .native-live-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;font-size:13px;font-weight:900;color:#173d57}
-      .native-live-source,.native-live-target{border-radius:10px;padding:8px 9px;font-size:14px;line-height:1.42;min-height:20px;word-break:break-word}
-      .native-live-source{background:#f1f5f8;color:#29485f}
-      .native-live-target{background:#eaf8f7;color:#0d6668;margin-top:6px;font-weight:700}
-      .native-live-empty{color:#8b9aa5;font-weight:600}
+      .native-current{margin-top:10px;border-top:1px solid #dbe9ed;padding-top:9px}
+      .native-current-direction{font-size:12px;font-weight:800;color:#69808e;margin-bottom:6px}
+      .native-current-row{border-radius:11px;padding:9px 10px;line-height:1.42;word-break:break-word}
+      .native-current-label{font-size:11px;font-weight:900;color:#718590;margin-bottom:4px}
+      .native-current-text{font-size:15px;font-weight:800;color:#173d57;min-height:20px}
+      .native-current-result{margin-top:7px;background:#eaf8f7}
+      .native-current-result .native-current-text{color:#0d6668}
+      .native-current-source{background:#f1f5f8}
+      .native-current-empty .native-current-text{color:#94a3ad;font-weight:600}
       @media(max-width:620px){
-        #nativeScenarioPanel,#nativePhrasePanel,#nativeAutoPanel,#nativeLivePanel{padding:0 8px;margin:6px auto}
+        #nativeScenarioPanel,#nativePhrasePanel,#nativeAutoPanel{padding:0 8px;margin:6px auto}
         .native-card{border-radius:13px;padding:9px}
         .native-mode-btn{font-size:14px;padding:9px 4px;min-height:41px}
-        .native-live-source,.native-live-target{font-size:13px}
+        .native-current-text{font-size:14px}
       }
     `;
     document.head.appendChild(style);
@@ -1312,16 +1312,11 @@ public class MainActivity extends Activity {
 
     const autoPanel=document.createElement('section');
     autoPanel.id='nativeAutoPanel';
-    autoPanel.innerHTML='<div class="native-card native-auto-card"><div class="native-auto-head"><div class="native-auto-title">🤖 자동대화</div><div id="nativeAutoBadge" class="native-auto-badge">● 대기 중</div></div><div id="nativeAutoStatus" class="native-auto-status">언어와 상황을 선택한 뒤 자동대화를 시작하세요.</div><button id="nativeAutoMainBtn" class="native-auto-main" type="button">▶ 자동대화 시작</button><div class="native-auto-help">직원 말 → 번역·재생 → 상대방 응답 대기 · 1.8초 무응답이면 직원이 바로 이어서 말할 수 있습니다.</div></div>';
-
-    const livePanel=document.createElement('section');
-    livePanel.id='nativeLivePanel';
-    livePanel.innerHTML='<div class="native-card"><div class="native-live-grid"><article id="nativeStaffTurn" class="native-live-turn"><div class="native-live-head"><span>직원</span><span>한국어 → 외국어</span></div><div id="nativeStaffSource" class="native-live-source native-live-empty">직원 말씀 대기 중</div><div id="nativeStaffTarget" class="native-live-target native-live-empty">번역 결과</div></article><article id="nativeVisitorTurn" class="native-live-turn"><div class="native-live-head"><span>민원인</span><span id="nativeVisitorLang">외국어 → 한국어</span></div><div id="nativeVisitorSource" class="native-live-source native-live-empty">민원인 말씀 대기 중</div><div id="nativeVisitorTarget" class="native-live-target native-live-empty">한국어 번역</div></article></div></div>';
+    autoPanel.innerHTML='<div class="native-card native-auto-card"><div class="native-auto-head"><div class="native-auto-title">🤖 자동대화</div><div id="nativeAutoBadge" class="native-auto-badge">● 대기 중</div></div><div id="nativeAutoStatus" class="native-auto-status">언어와 상황을 선택한 뒤 자동대화를 시작하세요.</div><button id="nativeAutoMainBtn" class="native-auto-main" type="button">▶ 자동대화 시작</button><div class="native-auto-help">번역 후 상대방 응답을 기다리고, 1.8초 무응답이면 바로 다음 말을 이어서 할 수 있습니다.</div><div class="native-current"><div id="nativeCurrentDirection" class="native-current-direction">자동 통역 대기</div><div id="nativeCurrentSource" class="native-current-row native-current-source native-current-empty"><div class="native-current-label">인식 문장</div><div id="nativeCurrentSourceText" class="native-current-text">말씀을 기다리고 있습니다.</div></div><div id="nativeCurrentResult" class="native-current-row native-current-result native-current-empty"><div class="native-current-label">번역 결과</div><div id="nativeCurrentResultText" class="native-current-text">번역 결과가 여기에 표시됩니다.</div></div></div></div>';
 
     languageBar.insertAdjacentElement('afterend',panel);
     panel.insertAdjacentElement('afterend',phrasePanel);
     phrasePanel.insertAdjacentElement('afterend',autoPanel);
-    autoPanel.insertAdjacentElement('afterend',livePanel);
 
     try{document.body.dataset.page='conversation';}catch(e){}
 
@@ -1345,44 +1340,60 @@ public class MainActivity extends Activity {
       autoBadge.textContent=running?'● 자동대화 진행 중':'● 대기 중';
       const dock=document.getElementById('dockStatus');
       const t=(dock&&dock.textContent||'').trim();
-      const clean = (!t || /버튼을 누르고|통역 연결 확인 필요|듣는 중 · 문장이 확정되면 표시합니다\./.test(t));
+      const clean = (!t || /버튼을 누르고|통역 연결 확인 필요|듣는 중 · 문장이 확정되면 표시합니다[.]/.test(t));
       autoStatus.textContent=clean ? (running?'상대방 말씀을 듣고 있습니다.':'언어와 상황을 선택한 뒤 자동대화를 시작하세요.') : t;
     }
 
-    function setLive(id,text,empty){
-      const el=document.getElementById(id);if(!el)return;
-      const v=String(text||'').trim();el.textContent=v||empty;el.classList.toggle('native-live-empty',!v);
+    let nativeCurrentSide='staff';
+
+    function usefulText(value){
+      const v=String(value||'').trim();
+      if(!v)return '';
+      if(/듣는 중|새 말씀을 듣고 있습니다|번역 중|번역문이 여기에 표시됩니다|자동대화를 시작하면/.test(v))return '';
+      return v;
     }
 
-    function syncLive(){
-      const sh=document.getElementById('staffHeardText');
-      const sr=document.getElementById('staffForeignResult');
-      const vh=document.getElementById('heardText');
-      const vr=document.getElementById('koreanResult');
-      setLive('nativeStaffSource',sh&&sh.textContent,'직원 말씀 대기 중');
-      setLive('nativeStaffTarget',sr&&sr.textContent,'번역 결과');
-      setLive('nativeVisitorSource',vh&&vh.textContent,'민원인 말씀 대기 중');
-      setLive('nativeVisitorTarget',vr&&vr.textContent,'한국어 번역');
+    function syncCurrent(preferSide){
+      if(preferSide==='staff'||preferSide==='visitor')nativeCurrentSide=preferSide;
+      const staffSource=usefulText(document.getElementById('staffHeardText')?.textContent);
+      const staffResult=usefulText(document.getElementById('staffForeignResult')?.textContent);
+      const visitorSource=usefulText(document.getElementById('heardText')?.textContent);
+      const visitorResult=usefulText(document.getElementById('koreanResult')?.textContent);
+
+      let side=nativeCurrentSide;
+      if(side==='staff'&&!staffSource&&!staffResult&&(visitorSource||visitorResult))side='visitor';
+      if(side==='visitor'&&!visitorSource&&!visitorResult&&(staffSource||staffResult))side='staff';
+
+      const source=side==='visitor'?visitorSource:staffSource;
+      const result=side==='visitor'?visitorResult:staffResult;
       const sel=document.getElementById('conversationLanguage');
-      const selected=sel&&sel.options&&sel.selectedIndex>=0?sel.options[sel.selectedIndex].text:'외국어';
-      const lang=document.getElementById('nativeVisitorLang');if(lang)lang.textContent=selected+' → 한국어';
-      let turn='';try{turn=autoConversationTurn||'';}catch(e){}
-      document.getElementById('nativeStaffTurn')?.classList.toggle('active',autoRunning()&&turn==='staff');
-      document.getElementById('nativeVisitorTurn')?.classList.toggle('active',autoRunning()&&turn==='visitor');
+      const foreign=sel&&sel.options&&sel.selectedIndex>=0?sel.options[sel.selectedIndex].text:'외국어';
+
+      document.getElementById('nativeCurrentDirection').textContent=
+        side==='visitor' ? foreign+' → 한국어' : '한국어 → '+foreign;
+
+      const sourceBox=document.getElementById('nativeCurrentSource');
+      const resultBox=document.getElementById('nativeCurrentResult');
+      const sourceText=document.getElementById('nativeCurrentSourceText');
+      const resultText=document.getElementById('nativeCurrentResultText');
+      if(sourceText)sourceText.textContent=source||'말씀을 기다리고 있습니다.';
+      if(resultText)resultText.textContent=result||'번역 결과가 여기에 표시됩니다.';
+      sourceBox?.classList.toggle('native-current-empty',!source);
+      resultBox?.classList.toggle('native-current-empty',!result);
     }
 
     function hideLegacyViews(){
       try{document.body.dataset.page='conversation';}catch(e){}
       const selectors=['.workspace-heading','.grid','#phraseView','#staffView','#speechView','#dynamicView'];
       selectors.forEach(sel=>document.querySelectorAll(sel).forEach(el=>{el.style.display='none';}));
-      let node=livePanel.nextElementSibling;
+      let node=autoPanel.nextElementSibling;
       while(node){
-        node.style.display='none';
+        if(node.id!=='nativeEarphoneStatus')node.style.display='none';
         node=node.nextElementSibling;
       }
     }
 
-    function syncAll(){hideLegacyViews();syncAuto();syncLive();}
+    function syncAll(){hideLegacyViews();syncAuto();syncCurrent();}
 
     function renderDetails(){
       const def=SCENARIO_DEFS[mode];
@@ -1439,21 +1450,29 @@ public class MainActivity extends Activity {
           if(typeof startAutoConversation==='function')startAutoConversation();
           else document.getElementById('autoConversationBtn')?.click();
         }
-      }catch(e){console.error('auto25 toggle',e);}
+      }catch(e){console.error('auto26 toggle',e);}
       setTimeout(syncAll,50);
     };
 
-    if(typeof scheduleAutoTurn==='function'&&!window.__auto25FastTurn){
-      const originalSchedule=scheduleAutoTurn;window.__auto25FastTurn=true;
+    if(typeof scheduleAutoTurn==='function'&&!window.__auto26FastTurn){
+      const originalSchedule=scheduleAutoTurn;window.__auto26FastTurn=true;
       scheduleAutoTurn=function(side,delay){
         const n=Number(delay);
         return originalSchedule(side,Math.min(Number.isFinite(n)&&n>0?n:360,360));
       };
     }
 
-    ['autoConversationBtn','dockStatus','staffSpeechStatus','speechStatus','staffHeardText','staffForeignResult','heardText','koreanResult'].forEach(id=>{
+    ['autoConversationBtn','dockStatus','staffSpeechStatus','speechStatus'].forEach(id=>{
       const el=document.getElementById(id);
       if(el)new MutationObserver(syncAll).observe(el,{attributes:true,childList:true,subtree:true,characterData:true});
+    });
+    ['staffHeardText','staffForeignResult'].forEach(id=>{
+      const el=document.getElementById(id);
+      if(el)new MutationObserver(()=>{nativeCurrentSide='staff';syncAll();}).observe(el,{attributes:true,childList:true,subtree:true,characterData:true});
+    });
+    ['heardText','koreanResult'].forEach(id=>{
+      const el=document.getElementById(id);
+      if(el)new MutationObserver(()=>{nativeCurrentSide='visitor';syncAll();}).observe(el,{attributes:true,childList:true,subtree:true,characterData:true});
     });
     document.getElementById('conversationLanguage')?.addEventListener('change',()=>setTimeout(syncAll,20));
 
@@ -1462,17 +1481,17 @@ public class MainActivity extends Activity {
     setMode(mode);syncAll();return true;
   }
 
-  let auto25UiAttempts=0;
-  function ensureAuto23UI(){
+  let auto26UiAttempts=0;
+  function ensureAuto26UI(){
     try{
       if(!document.querySelector('.languagebar')||typeof setConversationMode!=='function')throw new Error('Page not ready');
       if(installScenarioUI())return;
     }catch(e){
-      if(++auto25UiAttempts<40){setTimeout(ensureAuto23UI,250);return;}
-      console.error('AUTO25 UI failed',e);
+      if(++auto26UiAttempts<40){setTimeout(ensureAuto26UI,250);return;}
+      console.error('AUTO26 UI failed',e);
     }
   }
-  setTimeout(ensureAuto23UI,0);
+  setTimeout(ensureAuto26UI,0);
 
   function NativeRecognition(){
     this.lang='ko-KR'; this.continuous=true; this.interimResults=false; this.maxAlternatives=5;
