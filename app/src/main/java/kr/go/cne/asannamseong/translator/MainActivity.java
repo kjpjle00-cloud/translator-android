@@ -134,7 +134,7 @@ public class MainActivity extends Activity {
                 if (url.startsWith(APP_URL)) injectNativeBridgeJs();
             }
         });
-        webView.loadUrl(APP_URL + "?native=1.0-test2b1-auto29");
+        webView.loadUrl(APP_URL + "?native=1.0-test2b1-auto23");
     }
 
     private void initTts() {
@@ -618,7 +618,7 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public String appVersion() { return "1.0-test2b1-auto29"; }
+        public String appVersion() { return "1.0-test2b1-auto23"; }
     }
 
     @Override
@@ -1218,13 +1218,13 @@ public class MainActivity extends Activity {
     return normalizeRecognitionContext(window.__recognitionContext);
   };
 
-  // AUTO27: 목표 시안과 같은 단일 자동통역 화면. 기존 웹 UI는 기능만 백그라운드에서 사용한다.
+  // AUTO23: 번역/TTS/이어폰 엔진은 그대로 두고 보이는 자동대화 화면만 교체한다.
   const SCENARIO_MODE_KEY='ans_usage_mode_v2';
   const SCENARIO_DETAIL_KEY='ans_usage_detail_v2';
   const SCENARIO_DEFS={
     work:{label:'업무용',icon:'💼',details:['학교·교육','행정·민원','회사·사무','병원·의료','계약·서류','방문·전화응대']},
-    travel:{label:'여행용',icon:'✈️',details:['공항','숙소','식당','교통','쇼핑','긴급상황']},
-    daily:{label:'일상용',icon:'🏠',details:['인사·소개','가족·친구','약속·시간','음식·생활','쇼핑','길찾기','자유대화']}
+    travel:{label:'여행용',icon:'✈️',details:['공항','출입국','숙소','식당','교통','관광','쇼핑','길찾기','긴급상황']},
+    daily:{label:'일상용',icon:'🏠',details:['인사·소개','가족·친구','약속·시간','음식·생활','쇼핑','길찾기','감정·의견','자유대화']}
   };
 
   function safeScenarioMode(value){
@@ -1232,217 +1232,105 @@ public class MainActivity extends Activity {
     return SCENARIO_DEFS[v]?v:'work';
   }
 
-  function installTargetStyles(){
-    if(document.getElementById('nativeTargetStyle'))return;
+  function installScenarioStyles(){
+    if(document.getElementById('nativeScenarioUiStyle'))return;
     const style=document.createElement('style');
-    style.id='nativeTargetStyle';
+    style.id='nativeScenarioUiStyle';
     style.textContent=`
-      html,body{background:#f5fafb!important}
-      body.native-target-active{margin:0!important;padding:0!important;overflow-x:hidden!important}
-      body.native-target-active>header.top,
-      body.native-target-active>main,
-      body.native-target-active>.speech-dock,
-      body.native-target-active>#bottomNav,
-      body.native-target-active>.appversion{display:none!important}
-      #nativeEarphoneStatus{display:none!important}
-      #nativeTargetApp{display:block;min-height:100vh;background:linear-gradient(180deg,#ffffff 0,#f5fafb 100%);color:#18384b;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding-bottom:78px;box-sizing:border-box}
-      #nativeTargetApp *{box-sizing:border-box}
-      .nt-header{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px 8px;background:#fff}
-      .nt-brand{display:flex;align-items:center;gap:10px;min-width:0}
-      .nt-logo{width:39px;height:39px;border-radius:12px;background:linear-gradient(135deg,#3c8ef7,#7b6ee8);color:#fff;display:grid;place-items:center;font-weight:900;font-size:18px;box-shadow:0 5px 14px rgba(73,106,205,.22)}
-      .nt-title{font-size:20px;line-height:1.05;font-weight:900;color:#17354d;margin:0}
-      .nt-subtitle{font-size:10px;color:#788d99;margin-top:4px;font-weight:700;white-space:nowrap}
-      .nt-head-actions{display:flex;align-items:center;gap:6px}
-      .nt-icon-btn{border:1px solid #dbe8ed;background:#fff;color:#37586d;border-radius:10px;min-width:34px;height:34px;padding:0 8px;font-size:12px;font-weight:800;box-shadow:0 2px 8px rgba(23,53,77,.04)}
-      .nt-body{padding:0 12px 12px;max-width:760px;margin:0 auto}
-      .nt-tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;background:#f5f8fa;border:1px solid #e4edf1;border-radius:12px;padding:4px;margin-top:4px}
-      .nt-tab{border:0;background:transparent;border-radius:9px;padding:9px 4px;color:#547083;font-size:13px;font-weight:900;white-space:nowrap}
-      .nt-tab.active{background:linear-gradient(135deg,#20a9ad,#1699a4);color:#fff;box-shadow:0 4px 12px rgba(22,153,164,.22)}
-      .nt-details{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;padding:8px 1px 7px}
-      .nt-details::-webkit-scrollbar{display:none}
-      .nt-detail{flex:0 0 auto;border:1px solid #dfe9ee;background:#fff;color:#567285;border-radius:999px;padding:7px 10px;font-size:11px;font-weight:850}
-      .nt-detail.active{border-color:#63c7ca;background:#e8f8f8;color:#16888e}
-      .nt-language{display:grid;grid-template-columns:1fr 38px 1fr;gap:7px;align-items:end;background:#fff;border:1px solid #e0eaee;border-radius:12px;padding:9px 10px;box-shadow:0 3px 12px rgba(32,70,89,.04)}
-      .nt-lang-block{min-width:0}
-      .nt-lang-label{font-size:10px;color:#748a98;font-weight:850;margin-bottom:4px}
-      .nt-lang-value,.nt-lang-select{width:100%;height:34px;border:1px solid #e0e9ed;border-radius:9px;background:#f9fbfc;color:#27485d;padding:0 10px;font-size:13px;font-weight:900}
-      .nt-lang-value{display:flex;align-items:center}
-      .nt-lang-select{appearance:auto}
-      .nt-swap{width:34px;height:34px;border:0;border-radius:50%;background:#eaf7f7;color:#17979d;font-size:18px;font-weight:900;margin-bottom:1px}
-      .nt-auto{margin-top:8px;background:#fff;border:1px solid #e0ebef;border-radius:14px;padding:11px;box-shadow:0 5px 18px rgba(34,70,91,.05)}
-      .nt-auto-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
-      .nt-auto-title{font-size:16px;font-weight:950;color:#18384b}
-      .nt-on{border-radius:999px;background:#e5f8ea;color:#25a356;padding:5px 8px;font-size:10px;font-weight:900;white-space:nowrap}
-      .nt-auto-copy{font-size:9px;color:#8799a4;margin-top:3px}
-      .nt-steps{display:grid;grid-template-columns:repeat(4,1fr);gap:2px;margin:10px 0 5px}
-      .nt-step{text-align:center;position:relative;color:#8ca0aa}
-      .nt-step:not(:last-child):after{content:"";position:absolute;top:16px;right:-12%;width:24%;height:1px;background:#dbe8ec}
-      .nt-step-icon{width:30px;height:30px;border-radius:50%;margin:0 auto 4px;background:#eef5f7;display:grid;place-items:center;font-size:14px;border:1px solid #e1ebee}
-      .nt-step-label{font-size:8.5px;font-weight:800;line-height:1.25}
-      .nt-step.active{color:#178f95}
-      .nt-step.active .nt-step-icon{background:#dff7f6;border-color:#74cfd0;color:#11888d;box-shadow:0 0 0 4px rgba(31,169,173,.08)}
-      .nt-divider{height:1px;background:#e5eef1;margin:8px 0}
-      .nt-mic-row{display:flex;align-items:center;justify-content:center;gap:16px;margin:7px 0 3px}
-      .nt-wave{color:#86d9db;font-size:18px;letter-spacing:2px;opacity:.8}
-      .nt-mic{width:64px;height:64px;border:8px solid #d9f4f4;border-radius:50%;background:linear-gradient(135deg,#27b6bb,#138e9a);color:#fff;display:grid;place-items:center;font-size:28px;box-shadow:0 7px 18px rgba(22,151,160,.25)}
-      .nt-mic.idle{background:linear-gradient(135deg,#7fa9b1,#668f98)}
-      .nt-status{text-align:center;font-size:12.5px;color:#178c92;font-weight:950;margin-top:6px}
-      .nt-status-sub{text-align:center;font-size:9px;color:#94a5ad;margin-top:2px}
-      .nt-chat{position:relative;border-radius:12px;padding:10px 42px 10px 10px;margin-top:7px;border:1px solid}
-      .nt-chat.me{background:linear-gradient(180deg,#eff8ff,#e9f5ff);border-color:#cfe6f5}
-      .nt-chat.them{background:linear-gradient(180deg,#f0fbf3,#eaf8ee);border-color:#cdebd5}
-      .nt-chat-head{display:flex;align-items:center;gap:6px;margin-bottom:5px}
-      .nt-avatar{width:23px;height:23px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:900}
-      .nt-chat.me .nt-avatar{background:#cdeaff;color:#1478b8}
-      .nt-chat.them .nt-avatar{background:#d2f2da;color:#2a9a4d}
-      .nt-chat-name{font-size:11px;font-weight:950;color:#26485d}
-      .nt-chat-lang{font-size:8.5px;color:#8398a4;font-weight:800}
-      .nt-time{margin-left:auto;font-size:8px;color:#90a1aa}
-      .nt-source{font-size:13px;font-weight:900;color:#18384b;line-height:1.35;min-height:18px}
-      .nt-chat-line{height:1px;background:rgba(105,145,164,.18);margin:6px 0}
-      .nt-result{font-size:10.5px;color:#5c7381;line-height:1.35;min-height:15px}
-      .nt-sound{position:absolute;right:9px;bottom:11px;width:28px;height:28px;border:1px solid #d5e4e9;background:#fff;border-radius:9px;color:#527184;font-size:14px}
-      .nt-progress{width:100%;border:0;border-radius:11px;background:linear-gradient(135deg,#18a5aa,#118f9a);color:#fff;font-size:13px;font-weight:950;padding:10px 12px;margin-top:9px;box-shadow:0 5px 14px rgba(17,143,154,.22)}
-      .nt-progress.stop{background:linear-gradient(135deg,#bd5953,#a7443e)}
-      .nt-manual{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:7px}
-      .nt-manual-btn{border:1px solid #d9e5ea;background:#fff;color:#496879;border-radius:10px;padding:9px 5px;font-size:11.5px;font-weight:900}
-      .nt-bottom{position:fixed;left:0;right:0;bottom:0;height:66px;background:rgba(255,255,255,.97);border-top:1px solid #e3ecef;display:grid;grid-template-columns:repeat(4,1fr);z-index:50;padding-bottom:max(4px,env(safe-area-inset-bottom));box-shadow:0 -4px 16px rgba(28,61,79,.05)}
-      .nt-nav{border:0;background:transparent;color:#6f8591;font-size:9px;font-weight:850;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px}
-      .nt-nav .ico{font-size:17px}
-      .nt-nav.active{color:#15939a;background:#eefafb}
-      .nt-float-message{position:fixed;left:50%;bottom:82px;transform:translateX(-50%);z-index:80;background:#173f4d;color:#fff;border-radius:999px;padding:8px 12px;font-size:11px;font-weight:800;box-shadow:0 5px 18px #0002;opacity:0;pointer-events:none;transition:opacity .2s}
-      .nt-float-message.show{opacity:1}
-      @media(min-width:700px){
-        .nt-body{max-width:520px}
-        .nt-header{max-width:520px;margin:0 auto}
-        .nt-bottom{left:50%;right:auto;width:520px;transform:translateX(-50%);border-left:1px solid #e3ecef;border-right:1px solid #e3ecef}
+      #howInstallBtn,#installBtn{display:none!important}
+      body .speech-dock{display:none!important}
+      body[data-page="conversation"] .workspace-heading,
+      body[data-page="conversation"] .grid,
+      body[data-page="conversation"] #phraseView,
+      body[data-page="conversation"] #staffView,
+      body[data-page="conversation"] #speechView,
+      body[data-page="conversation"] #dynamicView{display:none!important}
+      body[data-page="conversation"] main{padding-bottom:12px!important}
+      #nativeScenarioPanel,#nativePhrasePanel,#nativeAutoPanel,#nativeLivePanel{display:none}
+      body[data-page="conversation"] #nativeScenarioPanel,
+      body[data-page="conversation"] #nativePhrasePanel,
+      body[data-page="conversation"] #nativeAutoPanel,
+      body[data-page="conversation"] #nativeLivePanel{display:block!important}
+      body[data-page="conversation"] #nativeLivePanel ~ *{display:none!important}
+      #nativeScenarioPanel,#nativePhrasePanel,#nativeAutoPanel,#nativeLivePanel{max-width:1180px;margin:6px auto;padding:0 10px;box-sizing:border-box}
+      .native-card{background:#fff;border:1px solid #dce8ee;border-radius:16px;padding:10px;box-shadow:0 5px 18px rgba(21,54,79,.06)}
+      .native-mode-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}
+      .native-mode-btn{border:1px solid #d9e5eb;background:#f8fbfc;color:#21405a;border-radius:13px;padding:10px 4px;font-size:15px;font-weight:800;min-height:43px;white-space:nowrap}
+      .native-mode-btn.active{background:linear-gradient(135deg,#0c9a9a,#1687a7);color:#fff;border-color:transparent;box-shadow:0 5px 14px rgba(13,145,157,.22)}
+      .native-detail-row{display:flex;gap:7px;overflow-x:auto;padding:8px 1px 0;scrollbar-width:none}
+      .native-detail-row::-webkit-scrollbar,.native-phrase-row::-webkit-scrollbar{display:none}
+      .native-detail-btn{flex:0 0 auto;border:1px solid #d9e5eb;background:#fff;color:#365168;border-radius:999px;padding:8px 11px;font-size:13px;font-weight:700}
+      .native-detail-btn.active{background:#e8f8f6;color:#087f7d;border-color:#8fd4ce}
+      .native-phrase-title{font-size:14px;font-weight:900;color:#173d57;margin-bottom:7px}
+      .native-phrase-row{display:flex;gap:7px;overflow-x:auto;scrollbar-width:none}
+      .native-phrase-btn{flex:0 0 auto;border:1px solid #bfe0e4;background:#f7fcfc;color:#155467;border-radius:999px;padding:8px 11px;font-size:13px;font-weight:800;white-space:nowrap}
+      .native-auto-card{background:linear-gradient(180deg,#f9feff,#f2fbfb);border-color:#cfe7e6}
+      .native-auto-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:7px}
+      .native-auto-title{font-size:19px;font-weight:900;color:#173d57}
+      .native-auto-badge{font-size:12px;font-weight:900;color:#147d50;background:#e8f8ef;border-radius:999px;padding:6px 9px;white-space:nowrap}
+      .native-auto-status{min-height:20px;color:#486275;font-size:13px;font-weight:800;margin:3px 0 8px}
+      .native-auto-main{width:100%;border:0;border-radius:14px;padding:13px 12px;background:linear-gradient(135deg,#0c9a9a,#1486a7);color:#fff;font-size:17px;font-weight:900;box-shadow:0 6px 16px rgba(13,145,157,.22)}
+      .native-auto-main.active{background:linear-gradient(135deg,#0f6f76,#0b617e)}
+      .native-auto-help{font-size:12px;color:#728694;text-align:center;margin-top:7px;line-height:1.45}
+      .native-live-grid{display:grid;grid-template-columns:1fr;gap:8px}
+      .native-live-turn{border:1px solid #dce8ee;border-radius:14px;padding:10px;background:#fbfdfe;min-width:0}
+      .native-live-turn.active{border-color:#8fd4ce;background:#f4fcfb;box-shadow:0 0 0 2px rgba(12,154,154,.06)}
+      .native-live-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;font-size:13px;font-weight:900;color:#173d57}
+      .native-live-source,.native-live-target{border-radius:10px;padding:8px 9px;font-size:14px;line-height:1.42;min-height:20px;word-break:break-word}
+      .native-live-source{background:#f1f5f8;color:#29485f}
+      .native-live-target{background:#eaf8f7;color:#0d6668;margin-top:6px;font-weight:700}
+      .native-live-empty{color:#8b9aa5;font-weight:600}
+      @media(max-width:620px){
+        #nativeScenarioPanel,#nativePhrasePanel,#nativeAutoPanel,#nativeLivePanel{padding:0 8px;margin:6px auto}
+        .native-card{border-radius:13px;padding:9px}
+        .native-mode-btn{font-size:14px;padding:9px 4px;min-height:41px}
+        .native-live-source,.native-live-target{font-size:13px}
       }
     `;
     document.head.appendChild(style);
   }
 
-  function installTargetUI(){
-    if(document.getElementById('nativeTargetApp'))return true;
-    if(typeof setConversationMode!=='function' || !document.getElementById('conversationLanguage'))return false;
-    installTargetStyles();
+  function installScenarioUI(){
+    if(document.getElementById('nativeScenarioPanel'))return true;
+    const languageBar=document.querySelector('.languagebar');
+    if(!languageBar)return false;
+    installScenarioStyles();
 
-    const root=document.createElement('div');
-    root.id='nativeTargetApp';
-    root.innerHTML=`
-      <header class="nt-header">
-        <div class="nt-brand">
-          <div class="nt-logo">A↔</div>
-          <div><h1 class="nt-title">실시간 통역</h1><div class="nt-subtitle">업무 · 여행 · 일상 자동대화</div></div>
-        </div>
-        <div class="nt-head-actions">
-          <button id="ntAudioBtn" class="nt-icon-btn" type="button" title="이어폰 분리 출력">🎧</button>
-          <button id="ntSettingsBtn" class="nt-icon-btn" type="button">⚙ 설정</button>
-        </div>
-      </header>
+    const header=document.querySelector('.brand');
+    if(header){
+      const title=header.querySelector('h1');
+      if(title)title.textContent='실시간 자동 통역';
+    }
 
-      <main class="nt-body">
-        <div class="nt-tabs">
-          <button class="nt-tab" data-mode="work" type="button">💼 업무용</button>
-          <button class="nt-tab" data-mode="travel" type="button">✈️ 여행용</button>
-          <button class="nt-tab" data-mode="daily" type="button">⌂ 일상용</button>
-        </div>
-        <div id="ntDetailRow" class="nt-details"></div>
+    const panel=document.createElement('section');
+    panel.id='nativeScenarioPanel';
+    panel.innerHTML='<div class="native-card"><div class="native-mode-tabs"><button class="native-mode-btn" data-mode="work" type="button">💼 업무용</button><button class="native-mode-btn" data-mode="travel" type="button">✈️ 여행용</button><button class="native-mode-btn" data-mode="daily" type="button">🏠 일상용</button></div><div id="nativeDetailRow" class="native-detail-row"></div></div>';
 
-        <section class="nt-language">
-          <div class="nt-lang-block"><div class="nt-lang-label">내 언어</div><div class="nt-lang-value">한국어</div></div>
-          <button class="nt-swap" type="button" aria-label="언어 방향">⇄</button>
-          <label class="nt-lang-block"><div class="nt-lang-label">상대 언어</div><select id="ntLanguageSelect" class="nt-lang-select"></select></label>
-        </section>
+    const phrasePanel=document.createElement('section');
+    phrasePanel.id='nativePhrasePanel';
+    phrasePanel.innerHTML='<div class="native-card"><div class="native-phrase-title">자주 쓰는 문장</div><div id="nativeQuickPhraseRow" class="native-phrase-row"></div></div>';
 
-        <section class="nt-auto">
-          <div class="nt-auto-head">
-            <div><div class="nt-auto-title">🤖 자동대화</div><div class="nt-auto-copy">자연스럽고 끊김 없는 대화를 제공합니다.</div></div>
-            <div id="ntAutoBadge" class="nt-on">● 자동 인식 대기</div>
-          </div>
+    const autoPanel=document.createElement('section');
+    autoPanel.id='nativeAutoPanel';
+    autoPanel.innerHTML='<div class="native-card native-auto-card"><div class="native-auto-head"><div class="native-auto-title">🤖 자동대화</div><div id="nativeAutoBadge" class="native-auto-badge">● 대기 중</div></div><div id="nativeAutoStatus" class="native-auto-status">언어와 상황을 선택한 뒤 자동대화를 시작하세요.</div><button id="nativeAutoMainBtn" class="native-auto-main" type="button">▶ 자동대화 시작</button><div class="native-auto-help">직원 한국어 → 번역·재생 → 민원인 외국어 → 번역·재생 순서로 종료할 때까지 반복합니다.</div></div>';
 
-          <div class="nt-steps">
-            <div id="ntStep0" class="nt-step"><div class="nt-step-icon">🎙</div><div class="nt-step-label">내 말을 듣는 중</div></div>
-            <div id="ntStep1" class="nt-step"><div class="nt-step-icon">▤</div><div class="nt-step-label">번역 중</div></div>
-            <div id="ntStep2" class="nt-step"><div class="nt-step-icon">🎙</div><div class="nt-step-label">상대방 말을 듣는 중</div></div>
-            <div id="ntStep3" class="nt-step"><div class="nt-step-icon">🔊</div><div class="nt-step-label">한국어로 들려주는 중</div></div>
-          </div>
+    const livePanel=document.createElement('section');
+    livePanel.id='nativeLivePanel';
+    livePanel.innerHTML='<div class="native-card"><div class="native-live-grid"><article id="nativeStaffTurn" class="native-live-turn"><div class="native-live-head"><span>직원</span><span>한국어 → 외국어</span></div><div id="nativeStaffSource" class="native-live-source native-live-empty">직원 말씀 대기 중</div><div id="nativeStaffTarget" class="native-live-target native-live-empty">번역 결과</div></article><article id="nativeVisitorTurn" class="native-live-turn"><div class="native-live-head"><span>민원인</span><span id="nativeVisitorLang">외국어 → 한국어</span></div><div id="nativeVisitorSource" class="native-live-source native-live-empty">민원인 말씀 대기 중</div><div id="nativeVisitorTarget" class="native-live-target native-live-empty">한국어 번역</div></article></div></div>';
 
-          <div class="nt-divider"></div>
-          <div class="nt-mic-row"><div class="nt-wave">▮▯▮</div><button id="ntMicBtn" class="nt-mic idle" type="button">🎙</button><div class="nt-wave">▮▯▮</div></div>
-          <div id="ntStatus" class="nt-status">자동대화를 시작해 주세요.</div>
-          <div class="nt-status-sub">버튼 없이 자동으로 대화가 이어집니다.</div>
-        </section>
+    languageBar.insertAdjacentElement('afterend',panel);
+    panel.insertAdjacentElement('afterend',phrasePanel);
+    phrasePanel.insertAdjacentElement('afterend',autoPanel);
+    autoPanel.insertAdjacentElement('afterend',livePanel);
 
-        <article class="nt-chat me">
-          <div class="nt-chat-head"><span class="nt-avatar">👤</span><span class="nt-chat-name">내 말</span><span class="nt-chat-lang">한국어</span><span id="ntMyTime" class="nt-time"></span></div>
-          <div id="ntMySource" class="nt-source">말씀을 기다리고 있습니다.</div>
-          <div class="nt-chat-line"></div>
-          <div id="ntMyResult" class="nt-result">번역 결과가 여기에 표시됩니다.</div>
-          <button id="ntMySound" class="nt-sound" type="button">🔊</button>
-        </article>
-
-        <article class="nt-chat them">
-          <div class="nt-chat-head"><span class="nt-avatar">👤</span><span class="nt-chat-name">상대방 말</span><span id="ntTheirLang" class="nt-chat-lang">외국어</span><span id="ntTheirTime" class="nt-time"></span></div>
-          <div id="ntTheirSource" class="nt-source">상대방 말씀을 기다리고 있습니다.</div>
-          <div class="nt-chat-line"></div>
-          <div id="ntTheirResult" class="nt-result">한국어 번역이 여기에 표시됩니다.</div>
-          <button id="ntTheirSound" class="nt-sound" type="button">🎧</button>
-        </article>
-
-        <button id="ntAutoBar" class="nt-progress" type="button">▶ 자동대화 시작</button>
-        <div class="nt-manual">
-          <button id="ntStaffManual" class="nt-manual-btn" type="button">🎙 내가 말하기</button>
-          <button id="ntVisitorManual" class="nt-manual-btn" type="button">🎧 수동 듣기</button>
-        </div>
-      </main>
-
-      <nav class="nt-bottom">
-        <button class="nt-nav active" type="button"><span class="ico">💬</span><span>대화</span></button>
-        <button id="ntFavorites" class="nt-nav" type="button"><span class="ico">☆</span><span>즐겨찾기</span></button>
-        <button id="ntHistory" class="nt-nav" type="button"><span class="ico">◷</span><span>기록</span></button>
-        <button id="ntBottomSettings" class="nt-nav" type="button"><span class="ico">⚙</span><span>설정</span></button>
-      </nav>
-      <div id="ntToast" class="nt-float-message"></div>
-    `;
-    document.body.appendChild(root);
-    document.body.classList.add('native-target-active');
-    document.body.dataset.page='conversation';
+    try{document.body.dataset.page='conversation';}catch(e){}
 
     let mode=safeScenarioMode(localStorage.getItem(SCENARIO_MODE_KEY)||window.getRecognitionContext()||'work');
     let detail=String(localStorage.getItem(SCENARIO_DETAIL_KEY)||'');
-    let lastStaffSource='',lastStaffResult='',lastVisitorSource='',lastVisitorResult='';
-    let staffTime='',visitorTime='';
-
-    const originalLanguage=document.getElementById('conversationLanguage');
-    const targetLanguage=document.getElementById('ntLanguageSelect');
-
-    function toast(text){
-      const t=document.getElementById('ntToast');
-      if(!t)return;
-      t.textContent=text;t.classList.add('show');
-      clearTimeout(t.__timer);t.__timer=setTimeout(()=>t.classList.remove('show'),1500);
-    }
-
-    function useful(value){
-      const v=String(value||'').trim();
-      if(!v)return '';
-      if(/듣는 중|새 말씀을 듣고 있습니다|번역 중|번역문이 여기에 표시됩니다|자동대화를 시작하면|문장 확인 후 번역합니다/.test(v))return '';
-      return v;
-    }
-
-    function currentClock(){
-      try{return new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'});}catch(e){return '';}
-    }
-
-    function syncLanguageOptions(){
-      const value=originalLanguage.value;
-      const html=[...originalLanguage.options].map(o=>`<option value="${String(o.value).replaceAll('"','&quot;')}">${o.textContent}</option>`).join('');
-      if(targetLanguage.innerHTML!==html)targetLanguage.innerHTML=html;
-      targetLanguage.value=value;
-      const selected=originalLanguage.options[originalLanguage.selectedIndex];
-      const foreign=selected?selected.textContent:'외국어';
-      document.getElementById('ntTheirLang').textContent=foreign;
-    }
+    const detailRow=panel.querySelector('#nativeDetailRow');
+    const autoMain=autoPanel.querySelector('#nativeAutoMainBtn');
+    const autoStatus=autoPanel.querySelector('#nativeAutoStatus');
+    const autoBadge=autoPanel.querySelector('#nativeAutoBadge');
 
     function autoRunning(){
       try{return conversationMode==='auto'&&autoConversationActive;}catch(e){}
@@ -1450,89 +1338,79 @@ public class MainActivity extends Activity {
       return !!(b&&(b.classList.contains('active')||/종료/.test(b.textContent||'')));
     }
 
-    function getStage(){
-      if(!autoRunning())return -1;
-      let turn='staff';
-      try{turn=autoConversationTurn||'staff';}catch(e){}
-      const st=String(document.getElementById('staffSpeechStatus')?.textContent||'');
-      const vt=String(document.getElementById('speechStatus')?.textContent||'');
-      if(turn==='visitor'){
-        if(/번역 중|읽는 중|번역 완료/.test(vt))return 3;
-        return 2;
-      }
-      if(/번역 중|읽는 중|번역 완료/.test(st))return 1;
-      return 0;
-    }
-
-    function syncStage(){
+    function syncAuto(){
       const running=autoRunning();
-      const stage=getStage();
-      for(let i=0;i<4;i++)document.getElementById('ntStep'+i)?.classList.toggle('active',i===stage);
-      const badge=document.getElementById('ntAutoBadge');
-      const mic=document.getElementById('ntMicBtn');
-      const bar=document.getElementById('ntAutoBar');
-      if(badge)badge.textContent=running?'● 자동 인식 ON':'● 자동 인식 대기';
-      mic?.classList.toggle('idle',!running);
-      if(bar){
-        bar.textContent=running?'▮▮  자동대화 진행 중':'▶ 자동대화 시작';
-        bar.classList.toggle('stop',running);
+      autoMain.classList.toggle('active',running);
+      autoMain.textContent=running?'■ 자동대화 종료':'▶ 자동대화 시작';
+      autoBadge.textContent=running?'● 자동대화 진행 중':'● 대기 중';
+      const dock=document.getElementById('dockStatus');
+      const t=(dock&&dock.textContent||'').trim();
+      const clean = (!t || /버튼을 누르고|통역 연결 확인 필요|듣는 중 · 문장이 확정되면 표시합니다\./.test(t));
+      autoStatus.textContent=clean ? (running?'상대방 말씀을 듣고 있습니다.':'언어와 상황을 선택한 뒤 자동대화를 시작하세요.') : t;
+    }
+
+    function setLive(id,text,empty){
+      const el=document.getElementById(id);if(!el)return;
+      const v=String(text||'').trim();el.textContent=v||empty;el.classList.toggle('native-live-empty',!v);
+    }
+
+    function syncLive(){
+      const sh=document.getElementById('staffHeardText');
+      const sr=document.getElementById('staffForeignResult');
+      const vh=document.getElementById('heardText');
+      const vr=document.getElementById('koreanResult');
+      setLive('nativeStaffSource',sh&&sh.textContent,'직원 말씀 대기 중');
+      setLive('nativeStaffTarget',sr&&sr.textContent,'번역 결과');
+      setLive('nativeVisitorSource',vh&&vh.textContent,'민원인 말씀 대기 중');
+      setLive('nativeVisitorTarget',vr&&vr.textContent,'한국어 번역');
+      const sel=document.getElementById('conversationLanguage');
+      const selected=sel&&sel.options&&sel.selectedIndex>=0?sel.options[sel.selectedIndex].text:'외국어';
+      const lang=document.getElementById('nativeVisitorLang');if(lang)lang.textContent=selected+' → 한국어';
+      let turn='';try{turn=autoConversationTurn||'';}catch(e){}
+      document.getElementById('nativeStaffTurn')?.classList.toggle('active',autoRunning()&&turn==='staff');
+      document.getElementById('nativeVisitorTurn')?.classList.toggle('active',autoRunning()&&turn==='visitor');
+    }
+
+    function hideLegacyViews(){
+      try{document.body.dataset.page='conversation';}catch(e){}
+      const selectors=['.workspace-heading','.grid','#phraseView','#staffView','#speechView','#dynamicView'];
+      selectors.forEach(sel=>document.querySelectorAll(sel).forEach(el=>{el.style.display='none';}));
+      let node=livePanel.nextElementSibling;
+      while(node){
+        node.style.display='none';
+        node=node.nextElementSibling;
       }
-      const status=document.getElementById('ntStatus');
-      if(!status)return;
-      const messages=[
-        '내 말을 자동으로 듣고 있습니다.',
-        '내 말을 번역해 상대방에게 들려주고 있습니다.',
-        '상대방 말을 자동으로 듣고 있습니다.',
-        '상대방 말을 한국어로 들려주고 있습니다.'
-      ];
-      status.textContent=stage>=0?messages[stage]:'자동대화를 시작해 주세요.';
     }
 
-    function syncMessages(){
-      const ss=useful(document.getElementById('staffHeardText')?.textContent);
-      const sr=useful(document.getElementById('staffForeignResult')?.textContent);
-      const vs=useful(document.getElementById('heardText')?.textContent);
-      const vr=useful(document.getElementById('koreanResult')?.textContent);
-      if(ss && ss!==lastStaffSource){lastStaffSource=ss;staffTime=currentClock();}
-      if(sr && sr!==lastStaffResult){lastStaffResult=sr;if(!staffTime)staffTime=currentClock();}
-      if(vs && vs!==lastVisitorSource){lastVisitorSource=vs;visitorTime=currentClock();}
-      if(vr && vr!==lastVisitorResult){lastVisitorResult=vr;if(!visitorTime)visitorTime=currentClock();}
-      document.getElementById('ntMySource').textContent=ss||lastStaffSource||'말씀을 기다리고 있습니다.';
-      document.getElementById('ntMyResult').textContent=sr||lastStaffResult||'번역 결과가 여기에 표시됩니다.';
-      document.getElementById('ntTheirSource').textContent=vs||lastVisitorSource||'상대방 말씀을 기다리고 있습니다.';
-      document.getElementById('ntTheirResult').textContent=vr||lastVisitorResult||'한국어 번역이 여기에 표시됩니다.';
-      document.getElementById('ntMyTime').textContent=staffTime;
-      document.getElementById('ntTheirTime').textContent=visitorTime;
-      syncLanguageOptions();
-    }
-
-    function syncAudio(){
-      const source=document.getElementById('nativeEarphoneStatus');
-      const button=document.getElementById('ntAudioBtn');
-      if(!button)return;
-      const text=String(source?.textContent||'');
-      button.textContent=/분리 ON/.test(text)?'🎧':'🔊';
-      button.title=text||'이어폰 출력';
-    }
-
-    function syncAll(){
-      document.body.classList.add('native-target-active');
-      document.body.dataset.page='conversation';
-      syncStage();syncMessages();syncAudio();
-    }
+    function syncAll(){hideLegacyViews();syncAuto();syncLive();}
 
     function renderDetails(){
-      const row=document.getElementById('ntDetailRow');
       const def=SCENARIO_DEFS[mode];
       if(!def.details.includes(detail))detail=def.details[0];
-      row.replaceChildren();
+      detailRow.replaceChildren();
       def.details.forEach(name=>{
         const b=document.createElement('button');
-        b.className='nt-detail'+(name===detail?' active':'');
-        b.type='button';b.textContent=name;
+        b.type='button';b.className='native-detail-btn'+(name===detail?' active':'');b.textContent=name;
+        b.onclick=()=>{detail=name;try{localStorage.setItem(SCENARIO_DETAIL_KEY,detail);}catch(e){}renderDetails();};
+        detailRow.appendChild(b);
+      });
+    }
+
+    const phraseSets={
+      work:['안녕하세요','잠시만 기다려 주세요','다시 말씀해 주세요','이 서류가 필요합니다','어디에서 신청하나요?'],
+      travel:['안녕하세요','이거 하나 주세요','카드 돼요?','이거 안 맵게 해주세요','화장실이 어디예요?'],
+      daily:['안녕하세요','괜찮아요','잠깐만요','내일 다시 와요','도와주세요']
+    };
+
+    function renderQuickPhrases(){
+      const row=document.getElementById('nativeQuickPhraseRow');if(!row)return;
+      row.replaceChildren();
+      (phraseSets[mode]||phraseSets.work).forEach(text=>{
+        const b=document.createElement('button');b.type='button';b.className='native-phrase-btn';b.textContent=text;
         b.onclick=()=>{
-          detail=name;try{localStorage.setItem(SCENARIO_DETAIL_KEY,detail);}catch(e){}
-          renderDetails();
+          try{window.setRecognitionContext(mode);}catch(e){}
+          const input=document.getElementById('manualKoreanText');if(input)input.value=text;
+          if(typeof translateStaffText==='function')translateStaffText(text,{autoSpeak:true,autoFlow:false});
         };
         row.appendChild(b);
       });
@@ -1542,13 +1420,15 @@ public class MainActivity extends Activity {
       mode=safeScenarioMode(next);
       try{localStorage.setItem(SCENARIO_MODE_KEY,mode);}catch(e){}
       try{window.setRecognitionContext(mode);}catch(e){}
-      root.querySelectorAll('.nt-tab').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));
+      panel.querySelectorAll('.native-mode-btn').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));
       if(!SCENARIO_DEFS[mode].details.includes(detail))detail=SCENARIO_DEFS[mode].details[0];
       try{localStorage.setItem(SCENARIO_DETAIL_KEY,detail);}catch(e){}
-      renderDetails();
+      renderDetails();renderQuickPhrases();syncAll();
     }
 
-    function toggleAuto(){
+    panel.querySelectorAll('.native-mode-btn').forEach(b=>b.onclick=()=>setMode(b.dataset.mode));
+
+    autoMain.onclick=()=>{
       try{window.setRecognitionContext(mode);}catch(e){}
       try{
         if(autoRunning()){
@@ -1559,45 +1439,12 @@ public class MainActivity extends Activity {
           if(typeof startAutoConversation==='function')startAutoConversation();
           else document.getElementById('autoConversationBtn')?.click();
         }
-      }catch(e){console.error('auto27 toggle',e);}
-      setTimeout(syncAll,60);
-    }
-
-    root.querySelectorAll('.nt-tab').forEach(b=>b.onclick=()=>setMode(b.dataset.mode));
-    targetLanguage.onchange=()=>{
-      originalLanguage.value=targetLanguage.value;
-      originalLanguage.dispatchEvent(new Event('change',{bubbles:true}));
-      setTimeout(syncAll,30);
-    };
-    document.getElementById('ntSettingsBtn').onclick=()=>document.getElementById('settingsBtn')?.click();
-    document.getElementById('ntBottomSettings').onclick=()=>document.getElementById('settingsBtn')?.click();
-    document.getElementById('ntAudioBtn').onclick=()=>document.getElementById('nativeEarphoneStatus')?.click();
-    document.getElementById('ntMicBtn').onclick=toggleAuto;
-    document.getElementById('ntAutoBar').onclick=toggleAuto;
-    document.getElementById('ntMySound').onclick=()=>document.getElementById('staffSpeakResultBtn')?.click();
-    document.getElementById('ntTheirSound').onclick=()=>document.getElementById('speakKoreanBtn')?.click();
-
-    document.getElementById('ntStaffManual').onclick=()=>{
-      try{cancelActiveSpeech();setTimeout(()=>beginSpeech('staff'),80);}catch(e){document.getElementById('staffMicBtn')?.click();}
-    };
-    document.getElementById('ntVisitorManual').onclick=()=>{
-      try{cancelActiveSpeech();setTimeout(()=>beginSpeech('visitor'),80);}catch(e){document.getElementById('micBtn')?.click();}
+      }catch(e){console.error('auto23 toggle',e);}
+      setTimeout(syncAll,50);
     };
 
-    document.getElementById('ntFavorites').onclick=()=>{
-      document.body.classList.remove('native-target-active');
-      root.style.display='none';
-      try{openWorkspacePage('favorites');}catch(e){document.querySelector('[data-page-nav="favorites"]')?.click();}
-    };
-
-    document.getElementById('ntHistory').onclick=()=>toast('기록 화면은 다음 단계에서 연결합니다.');
-
-    document.querySelector('[data-page-nav="conversation"]')?.addEventListener('click',()=>{
-      setTimeout(()=>{root.style.display='block';document.body.classList.add('native-target-active');syncAll();},40);
-    });
-
-    if(typeof scheduleAutoTurn==='function'&&!window.__auto27FastTurn){
-      const originalSchedule=scheduleAutoTurn;window.__auto27FastTurn=true;
+    if(typeof scheduleAutoTurn==='function'&&!window.__auto23FastTurn){
+      const originalSchedule=scheduleAutoTurn;window.__auto23FastTurn=true;
       scheduleAutoTurn=function(side,delay){
         const n=Number(delay);
         return originalSchedule(side,Math.min(Number.isFinite(n)&&n>0?n:360,360));
@@ -1608,84 +1455,32 @@ public class MainActivity extends Activity {
       const el=document.getElementById(id);
       if(el)new MutationObserver(syncAll).observe(el,{attributes:true,childList:true,subtree:true,characterData:true});
     });
-    new MutationObserver(syncAudio).observe(document.body,{childList:true,subtree:true});
+    document.getElementById('conversationLanguage')?.addEventListener('change',()=>setTimeout(syncAll,20));
 
-    originalLanguage.addEventListener('change',()=>setTimeout(syncAll,20));
     if(typeof setConversationMode==='function')setConversationMode('auto');
-    setMode(mode);
-    syncLanguageOptions();
-    syncAll();
-    return true;
+    const note=document.querySelector('.quick-note');if(note)note.textContent='자동대화 번역 연결';
+    setMode(mode);syncAll();return true;
   }
 
-  let auto27UiAttempts=0;
-  function ensureAuto27UI(){
+  let auto23UiAttempts=0;
+  function ensureAuto23UI(){
     try{
-      if(installTargetUI())return;
+      if(!document.querySelector('.languagebar')||typeof setConversationMode!=='function')throw new Error('Page not ready');
+      if(installScenarioUI())return;
     }catch(e){
-      console.error('AUTO27 UI install',e);
+      if(++auto23UiAttempts<40){setTimeout(ensureAuto23UI,250);return;}
+      console.error('AUTO23 UI failed',e);
     }
-    if(++auto27UiAttempts<50)setTimeout(ensureAuto27UI,200);
   }
-  setTimeout(ensureAuto27UI,0);
+  setTimeout(ensureAuto23UI,0);
 
   function NativeRecognition(){
     this.lang='ko-KR'; this.continuous=true; this.interimResults=false; this.maxAlternatives=5;
     this.onstart=this.onspeechstart=this.onspeechend=this.onresult=this.onerror=this.onend=null;
     this.__id=null;
-    this.__heard=false;
-    this.__autoSide='';
-    this.__autoSilenceTimer=null;
-    this.__autoSilenceHandled=false;
   }
-
-  function clearAutoSilenceTimer(r){
-    if(!r)return;
-    clearTimeout(r.__autoSilenceTimer);
-    r.__autoSilenceTimer=null;
-  }
-
-  function handleAutoSilence(r){
-    if(!r || r.__autoSilenceHandled || r.__heard)return false;
-    let running=false;
-    try{running=conversationMode==='auto'&&autoConversationActive;}catch(e){}
-    if(!running)return false;
-
-    r.__autoSilenceHandled=true;
-    clearAutoSilenceTimer(r);
-    const silentSide=r.__autoSide==='visitor'?'visitor':'staff';
-    const nextSide=silentSide==='visitor'?'staff':'staff';
-
-    // Close only the current microphone session. Keep automatic conversation ON.
-    try{cancelActiveSpeech();}catch(e){
-      try{if(r.__id)AndroidAudio.stopRecognition(r.__id,true);}catch(ignore){}
-    }
-
-    const dock=document.getElementById('dockStatus');
-    if(dock){
-      dock.textContent=silentSide==='visitor'
-        ? '상대방 응답 없음 · 직원 말씀을 다시 듣습니다'
-        : '직원 말씀을 계속 기다립니다';
-    }
-
-    setTimeout(()=>{
-      try{
-        if(conversationMode==='auto'&&autoConversationActive){
-          scheduleAutoTurn(nextSide,0);
-        }
-      }catch(e){}
-    },120);
-    return true;
-  }
-
   NativeRecognition.prototype.start=function(){
     this.__id='r'+Date.now()+'_'+(++recSeq); recognizers[this.__id]=this;
-    this.__heard=false;
-    this.__autoSilenceHandled=false;
-    clearAutoSilenceTimer(this);
-    try{
-      this.__autoSide=(conversationMode==='auto'&&autoConversationActive)?String(autoConversationTurn||'staff'):'';
-    }catch(e){this.__autoSide='';}
     const context=normalizeRecognitionContext(window.__recognitionContext);
     try{
       AndroidAudio.startRecognitionWithContext(
@@ -1697,45 +1492,22 @@ public class MainActivity extends Activity {
       AndroidAudio.startRecognition(this.__id,String(this.lang||'ko-KR'));
     }
   };
-  NativeRecognition.prototype.stop=function(){ clearAutoSilenceTimer(this); if(this.__id) AndroidAudio.stopRecognition(this.__id,false); };
-  NativeRecognition.prototype.abort=function(){ clearAutoSilenceTimer(this); if(this.__id) AndroidAudio.stopRecognition(this.__id,true); };
+  NativeRecognition.prototype.stop=function(){ if(this.__id) AndroidAudio.stopRecognition(this.__id,false); };
+  NativeRecognition.prototype.abort=function(){ if(this.__id) AndroidAudio.stopRecognition(this.__id,true); };
   window.SpeechRecognition=NativeRecognition;
   window.webkitSpeechRecognition=NativeRecognition;
   window.__nativeRecognitionEvent=function(id,type,payload){
     const r=recognizers[id]; if(!r) return;
-    if(type==='start'){
-      safe(r.onstart,{type:'start'});
-      clearAutoSilenceTimer(r);
-      let running=false;
-      try{running=conversationMode==='auto'&&autoConversationActive;}catch(e){}
-      if(running){
-        const dock=document.getElementById('dockStatus');
-        if(dock && r.__autoSide==='visitor')dock.textContent='상대방 말씀을 기다립니다 · 무응답이면 직원 차례로 돌아갑니다';
-        r.__autoSilenceTimer=setTimeout(()=>handleAutoSilence(r),1800);
-      }
-    }
-    else if(type==='speechstart'){
-      r.__heard=true; clearAutoSilenceTimer(r);
-      safe(r.onspeechstart,{type:'speechstart'});
-    }
+    if(type==='start') safe(r.onstart,{type:'start'});
+    else if(type==='speechstart') safe(r.onspeechstart,{type:'speechstart'});
     else if(type==='speechend') safe(r.onspeechend,{type:'speechend'});
     else if(type==='partial'||type==='final'){
-      r.__heard=true; clearAutoSilenceTimer(r);
       const alt={transcript:String(payload||''),confidence:1};
       const row=[alt]; row.isFinal=(type==='final');
       const results=[row];
       safe(r.onresult,{resultIndex:0,results:results});
-    } else if(type==='error'){
-      const err=String(payload||'unknown');
-      clearAutoSilenceTimer(r);
-      if((err==='no-speech'||err==='aborted')&&!r.__heard&&handleAutoSilence(r))return;
-      safe(r.onerror,{error:err});
-    }
-    else if(type==='end'){
-      clearAutoSilenceTimer(r);
-      if(!r.__heard && handleAutoSilence(r))return;
-      safe(r.onend,{type:'end'}); delete recognizers[id]; r.__id=null;
-    }
+    } else if(type==='error') safe(r.onerror,{error:String(payload||'unknown')});
+    else if(type==='end'){ safe(r.onend,{type:'end'}); delete recognizers[id]; r.__id=null; }
   };
 
   function installStatus(){
