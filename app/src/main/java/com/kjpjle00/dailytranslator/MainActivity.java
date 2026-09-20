@@ -1,6 +1,7 @@
 package com.kjpjle00.dailytranslator;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -10,11 +11,17 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
+import android.view.inputmethod.InputMethodManager;
+import android.content.Context;
+import android.widget.EditText;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Space;
 import android.widget.TextView;
+import android.widget.Toast;
+
+import java.util.List;
 
 public class MainActivity extends Activity {
 
@@ -30,13 +37,26 @@ public class MainActivity extends Activity {
     private static final int BORDER = Color.rgb(220, 232, 239);
     private static final int GREEN = Color.rgb(39, 173, 83);
     private static final int WHITE = Color.WHITE;
+    private static final int RED = Color.rgb(191, 61, 61);
 
+    private final String[] categories = {"업무용", "여행용", "일상용"};
+
+    private BasicPhraseStore phraseStore;
     private LinearLayout categoryRow;
     private LinearLayout scenarioRow;
+    private LinearLayout phraseList;
+    private TextView phraseTitle;
+    private TextView favoriteFilterButton;
+    private TextView selectedPhraseText;
+
+    private String selectedCategory = "여행용";
+    private String selectedScenario = "식당";
+    private boolean favoritesOnly = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        phraseStore = new BasicPhraseStore(this);
 
         getWindow().setStatusBarColor(Color.WHITE);
         getWindow().setNavigationBarColor(Color.WHITE);
@@ -51,7 +71,6 @@ public class MainActivity extends Activity {
         final int padBottom = dp(12);
         page.setPadding(padLeft, padTop, padRight, padBottom);
 
-        // Android 15/16 edge-to-edge 환경에서도 상태표시줄/내비게이션바와 겹치지 않게 처리
         page.setOnApplyWindowInsetsListener((v, insets) -> {
             int topInset;
             int bottomInset;
@@ -78,6 +97,8 @@ public class MainActivity extends Activity {
         page.addView(buildCategoryTabs());
         page.addView(space(7));
         page.addView(buildScenarioChips());
+        page.addView(space(8));
+        page.addView(buildPhrasePanel());
         page.addView(space(8));
         page.addView(buildLanguageCard());
         page.addView(space(7));
@@ -106,6 +127,10 @@ public class MainActivity extends Activity {
 
         setContentView(scroll);
         page.requestApplyInsets();
+
+        refreshCategoryTabs();
+        refreshScenarios();
+        refreshPhrases();
     }
 
     private View buildHeader() {
@@ -120,7 +145,7 @@ public class MainActivity extends Activity {
         LinearLayout titleBox = vbox();
         titleBox.setPadding(dp(9), 0, 0, 0);
         TextView title = text("일상번역기", 24, NAVY, true);
-        TextView sub = text("업무 · 여행 · 일상  |  지속세션형 자동대화", 11, MUTED, false);
+        TextView sub = text("업무 · 여행 · 일상  |  기본 멘트 + 지속 자동대화", 11, MUTED, false);
         titleBox.addView(title);
         titleBox.addView(space(1));
         titleBox.addView(sub);
@@ -141,43 +166,66 @@ public class MainActivity extends Activity {
 
         String[] labels = {"▣ 업무용", "✈ 여행용", "⌂ 일상용"};
         for (int i = 0; i < labels.length; i++) {
-            TextView tab = text(labels[i], 14, i == 1 ? WHITE : NAVY, true);
+            TextView tab = text(labels[i], 14, NAVY, true);
             tab.setGravity(Gravity.CENTER);
-            tab.setBackground(round(
-                    i == 1 ? TEAL : Color.TRANSPARENT,
-                    12,
-                    Color.TRANSPARENT,
-                    0
-            ));
-            final TextView current = tab;
-            tab.setOnClickListener(v -> selectCategory(current));
+            tab.setTag(categories[i]);
+            final String category = categories[i];
+            tab.setOnClickListener(v -> {
+                selectedCategory = category;
+                selectedScenario = defaultScenario(category);
+                favoritesOnly = false;
+                refreshCategoryTabs();
+                refreshScenarios();
+                refreshPhrases();
+            });
             wrap.addView(tab, new LinearLayout.LayoutParams(0, dp(43), 1f));
         }
         return wrap;
     }
 
+    private void refreshCategoryTabs() {
+        if (categoryRow == null) return;
+        for (int i = 0; i < categoryRow.getChildCount(); i++) {
+            View v = categoryRow.getChildAt(i);
+            if (!(v instanceof TextView)) continue;
+            TextView t = (TextView) v;
+            boolean active = selectedCategory.equals(String.valueOf(t.getTag()));
+            t.setTextColor(active ? WHITE : NAVY);
+            t.setBackground(round(
+                    active ? TEAL : Color.TRANSPARENT,
+                    12,
+                    Color.TRANSPARENT,
+                    0
+            ));
+        }
+    }
+
     private View buildScenarioChips() {
         HorizontalScrollView hsv = new HorizontalScrollView(this);
         hsv.setHorizontalScrollBarEnabled(false);
-
         scenarioRow = hbox();
         scenarioRow.setPadding(0, dp(1), dp(4), dp(1));
+        hsv.addView(scenarioRow);
+        return hsv;
+    }
 
-        String[] items = {
-                "✈ 공항", "▰ 숙소", "🍴 식당", "▣ 교통", "▢ 쇼핑", "⚠ 긴급상황"
-        };
+    private void refreshScenarios() {
+        if (scenarioRow == null) return;
+        scenarioRow.removeAllViews();
 
-        for (String item : items) {
-            boolean selected = item.contains("식당");
+        String[] scenarios = scenariosFor(selectedCategory);
+        for (String scenario : scenarios) {
+            boolean active = scenario.equals(selectedScenario);
             TextView chip = pill(
-                    item,
+                    scenarioIcon(scenario) + " " + scenario,
                     12,
-                    selected ? WHITE : NAVY,
-                    selected ? TEAL : WHITE,
+                    active ? WHITE : NAVY,
+                    active ? TEAL : WHITE,
                     BORDER,
                     18
             );
             chip.setPadding(dp(12), dp(8), dp(12), dp(8));
+            chip.setTag(scenario);
 
             LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -186,12 +234,256 @@ public class MainActivity extends Activity {
             p.setMargins(0, 0, dp(6), 0);
             scenarioRow.addView(chip, p);
 
-            final TextView current = chip;
-            chip.setOnClickListener(v -> selectScenario(current));
+            chip.setOnClickListener(v -> {
+                selectedScenario = String.valueOf(v.getTag());
+                favoritesOnly = false;
+                refreshScenarios();
+                refreshPhrases();
+            });
+        }
+    }
+
+    private View buildPhrasePanel() {
+        LinearLayout card = vbox();
+        card.setPadding(dp(11), dp(10), dp(11), dp(11));
+        card.setBackground(round(WHITE, 16, BORDER, 1));
+
+        LinearLayout header = hbox();
+        header.setGravity(Gravity.CENTER_VERTICAL);
+
+        LinearLayout titleBox = vbox();
+        TextView title = text("기본 멘트", 17, TEXT, true);
+        phraseTitle = text("", 10, MUTED, false);
+        titleBox.addView(title);
+        titleBox.addView(space(2));
+        titleBox.addView(phraseTitle);
+        header.addView(titleBox,
+                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView add = pill("+ 내 문구", 11, WHITE, TEAL, TEAL, 14);
+        add.setGravity(Gravity.CENTER);
+        add.setPadding(dp(10), dp(7), dp(10), dp(7));
+        add.setOnClickListener(v -> showPhraseEditor(null));
+        header.addView(add);
+
+        favoriteFilterButton = pill("☆ 즐겨찾기", 11, NAVY, WHITE, BORDER, 14);
+        favoriteFilterButton.setGravity(Gravity.CENTER);
+        favoriteFilterButton.setPadding(dp(10), dp(7), dp(10), dp(7));
+        LinearLayout.LayoutParams fp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        fp.setMargins(dp(6), 0, 0, 0);
+        header.addView(favoriteFilterButton, fp);
+
+        favoriteFilterButton.setOnClickListener(v -> {
+            favoritesOnly = !favoritesOnly;
+            refreshPhrases();
+        });
+
+        card.addView(header);
+        card.addView(space(8));
+
+        phraseList = vbox();
+        card.addView(phraseList);
+
+        card.addView(space(8));
+
+        LinearLayout selected = vbox();
+        selected.setPadding(dp(10), dp(9), dp(10), dp(9));
+        selected.setBackground(round(PALE_TEAL, 14, Color.rgb(194, 231, 231), 1));
+
+        TextView selectedLabel = text("선택된 문구", 10, TEAL_DARK, true);
+        selectedPhraseText = text("아래 기본 멘트를 누르면 여기에 선택됩니다.", 13, TEXT, true);
+        selected.addView(selectedLabel);
+        selected.addView(space(4));
+        selected.addView(selectedPhraseText);
+        selected.addView(space(7));
+
+        TextView speak = pill("🔊 번역해서 말하기", 12, WHITE, TEAL, TEAL_DARK, 16);
+        speak.setGravity(Gravity.CENTER);
+        speak.setPadding(dp(10), dp(9), dp(10), dp(9));
+        speak.setOnClickListener(v -> Toast.makeText(
+                this,
+                "다음 단계에서 선택 문구를 실제 번역·음성 재생에 연결합니다.",
+                Toast.LENGTH_SHORT
+        ).show());
+        selected.addView(speak);
+
+        card.addView(selected);
+        return card;
+    }
+
+    private void refreshPhrases() {
+        if (phraseList == null) return;
+
+        phraseTitle.setText(selectedCategory + "  ›  " + selectedScenario);
+        favoriteFilterButton.setText(favoritesOnly ? "★ 전체보기" : "☆ 즐겨찾기");
+        favoriteFilterButton.setTextColor(favoritesOnly ? TEAL_DARK : NAVY);
+        favoriteFilterButton.setBackground(round(
+                favoritesOnly ? PALE_TEAL : WHITE,
+                14,
+                favoritesOnly ? Color.rgb(194, 231, 231) : BORDER,
+                1
+        ));
+
+        phraseList.removeAllViews();
+        List<BasicPhraseStore.Phrase> items =
+                phraseStore.get(selectedCategory, selectedScenario, favoritesOnly);
+
+        if (items.isEmpty()) {
+            TextView empty = text(
+                    favoritesOnly
+                            ? "이 상황에 즐겨찾기한 문구가 없습니다."
+                            : "등록된 문구가 없습니다. ‘+ 내 문구’로 추가해 주세요.",
+                    12,
+                    MUTED,
+                    false
+            );
+            empty.setGravity(Gravity.CENTER);
+            empty.setPadding(dp(8), dp(16), dp(8), dp(16));
+            phraseList.addView(empty);
+            return;
         }
 
-        hsv.addView(scenarioRow);
-        return hsv;
+        int count = 0;
+        for (BasicPhraseStore.Phrase phrase : items) {
+            phraseList.addView(buildPhraseRow(phrase));
+            count++;
+            if (count < items.size()) phraseList.addView(space(6));
+        }
+    }
+
+    private View buildPhraseRow(BasicPhraseStore.Phrase phrase) {
+        LinearLayout row = hbox();
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(8), dp(8), dp(8), dp(8));
+        row.setBackground(round(
+                phrase.custom ? Color.rgb(255, 253, 242) : Color.rgb(250, 253, 255),
+                13,
+                BORDER,
+                1
+        ));
+
+        TextView star = text(phrase.favorite ? "★" : "☆", 21,
+                phrase.favorite ? Color.rgb(230, 160, 26) : MUTED, true);
+        star.setGravity(Gravity.CENTER);
+        star.setOnClickListener(v -> {
+            phraseStore.toggleFavorite(phrase);
+            refreshPhrases();
+        });
+        row.addView(star, lp(dp(38), dp(38)));
+
+        LinearLayout center = vbox();
+        center.setPadding(dp(5), 0, dp(5), 0);
+
+        TextView phraseText = text(phrase.text, 13, TEXT, true);
+        TextView type = text(
+                phrase.custom ? "내 문구" : "기본 문구",
+                9,
+                phrase.custom ? Color.rgb(155, 118, 27) : MUTED,
+                false
+        );
+
+        center.addView(phraseText);
+        center.addView(space(3));
+        center.addView(type);
+        center.setOnClickListener(v -> selectPhrase(phrase));
+        row.addView(center,
+                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView edit = pill("수정", 10, NAVY, WHITE, BORDER, 12);
+        edit.setGravity(Gravity.CENTER);
+        edit.setPadding(dp(8), dp(6), dp(8), dp(6));
+        edit.setOnClickListener(v -> showPhraseEditor(phrase));
+        row.addView(edit);
+
+        TextView delete = pill("삭제", 10, RED, WHITE, Color.rgb(241, 210, 210), 12);
+        delete.setGravity(Gravity.CENTER);
+        delete.setPadding(dp(8), dp(6), dp(8), dp(6));
+        LinearLayout.LayoutParams dp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        dp.setMargins(this.dp(5), 0, 0, 0);
+        row.addView(delete, dp);
+        delete.setOnClickListener(v -> confirmDelete(phrase));
+
+        row.setOnClickListener(v -> selectPhrase(phrase));
+        return row;
+    }
+
+    private void selectPhrase(BasicPhraseStore.Phrase phrase) {
+        selectedPhraseText.setText(phrase.text);
+        Toast.makeText(this, "문구를 선택했습니다.", Toast.LENGTH_SHORT).show();
+    }
+
+    private void showPhraseEditor(BasicPhraseStore.Phrase phrase) {
+        final EditText input = new EditText(this);
+        input.setText(phrase == null ? "" : phrase.text);
+        input.setHint("사용할 문구를 입력하세요.");
+        input.setTextSize(16);
+        input.setTextColor(TEXT);
+        input.setSingleLine(false);
+        input.setMinLines(2);
+        input.setMaxLines(4);
+        input.setPadding(dp(14), dp(12), dp(14), dp(12));
+        input.setBackground(round(Color.rgb(250, 253, 255), 12, BORDER, 1));
+
+        LinearLayout holder = vbox();
+        holder.setPadding(dp(18), dp(8), dp(18), 0);
+        holder.addView(input);
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(phrase == null
+                        ? selectedCategory + " · " + selectedScenario + " 문구 추가"
+                        : "문구 수정")
+                .setView(holder)
+                .setNegativeButton("취소", null)
+                .setPositiveButton("저장", null)
+                .create();
+
+        dialog.setOnShowListener(d -> {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                String value = input.getText().toString().trim();
+                if (value.isEmpty()) {
+                    Toast.makeText(this, "문구를 입력해 주세요.", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+
+                if (phrase == null) {
+                    phraseStore.add(selectedCategory, selectedScenario, value);
+                } else {
+                    phraseStore.update(phrase, value);
+                }
+
+                refreshPhrases();
+                dialog.dismiss();
+            });
+
+            input.requestFocus();
+            input.postDelayed(() -> {
+                InputMethodManager imm = (InputMethodManager)
+                        getSystemService(Context.INPUT_METHOD_SERVICE);
+                if (imm != null) {
+                    imm.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT);
+                }
+            }, 200);
+        });
+
+        dialog.show();
+    }
+
+    private void confirmDelete(BasicPhraseStore.Phrase phrase) {
+        new AlertDialog.Builder(this)
+                .setTitle("문구 삭제")
+                .setMessage("이 문구를 삭제할까요?\n\n" + phrase.text)
+                .setNegativeButton("취소", null)
+                .setPositiveButton("삭제", (dialog, which) -> {
+                    phraseStore.delete(phrase);
+                    refreshPhrases();
+                })
+                .show();
     }
 
     private View buildLanguageCard() {
@@ -443,20 +735,14 @@ public class MainActivity extends Activity {
         card.addView(head);
 
         card.addView(space(6));
-
-        TextView source = text("이 메뉴는 맵지 않게 해주세요.", 15, TEXT, true);
-        card.addView(source);
-
+        card.addView(text("이 메뉴는 맵지 않게 해주세요.", 15, TEXT, true));
         card.addView(space(5));
-
-        TextView translated = text(
+        card.addView(text(
                 "Please make this dish not spicy.",
                 13,
                 Color.rgb(52, 87, 119),
                 false
-        );
-        card.addView(translated);
-
+        ));
         card.addView(space(7));
 
         TextView speaker = pill(
@@ -491,25 +777,19 @@ public class MainActivity extends Activity {
         card.addView(head);
 
         card.addView(space(6));
-
-        TextView source = text(
+        card.addView(text(
                 "Would you like anything to drink?",
                 15,
                 TEXT,
                 true
-        );
-        card.addView(source);
-
+        ));
         card.addView(space(5));
-
-        TextView translated = text(
+        card.addView(text(
                 "마실 것은 무엇으로 드릴까요?",
                 13,
                 Color.rgb(52, 87, 119),
                 false
-        );
-        card.addView(translated);
-
+        ));
         card.addView(space(7));
 
         TextView earphone = pill(
@@ -538,22 +818,8 @@ public class MainActivity extends Activity {
     private View buildManualButtons() {
         LinearLayout row = hbox();
 
-        TextView left = pill(
-                "🎙 내가 말하기",
-                12,
-                NAVY,
-                WHITE,
-                BORDER,
-                19
-        );
-        TextView right = pill(
-                "🎧 이어폰 듣기",
-                12,
-                NAVY,
-                WHITE,
-                BORDER,
-                19
-        );
+        TextView left = pill("🎙 내가 말하기", 12, NAVY, WHITE, BORDER, 19);
+        TextView right = pill("🎧 이어폰 듣기", 12, NAVY, WHITE, BORDER, 19);
 
         left.setGravity(Gravity.CENTER);
         right.setGravity(Gravity.CENTER);
@@ -588,12 +854,7 @@ public class MainActivity extends Activity {
             item.setGravity(Gravity.CENTER);
 
             if (i == 0) {
-                item.setBackground(round(
-                        PALE_TEAL,
-                        14,
-                        Color.TRANSPARENT,
-                        0
-                ));
+                item.setBackground(round(PALE_TEAL, 14, Color.TRANSPARENT, 0));
             }
 
             TextView icon = text(
@@ -625,37 +886,41 @@ public class MainActivity extends Activity {
         return row;
     }
 
-    private void selectCategory(TextView chosen) {
-        for (int i = 0; i < categoryRow.getChildCount(); i++) {
-            View v = categoryRow.getChildAt(i);
-            if (!(v instanceof TextView)) continue;
-
-            TextView t = (TextView) v;
-            boolean active = t == chosen;
-            t.setTextColor(active ? WHITE : NAVY);
-            t.setBackground(round(
-                    active ? TEAL : Color.TRANSPARENT,
-                    12,
-                    Color.TRANSPARENT,
-                    0
-            ));
+    private String[] scenariosFor(String category) {
+        if ("업무용".equals(category)) {
+            return new String[]{"민원안내", "서류작성", "대기·호출", "연락·재방문"};
         }
+        if ("일상용".equals(category)) {
+            return new String[]{"인사", "소개", "약속·시간", "식사", "길찾기", "부탁·대화"};
+        }
+        return new String[]{"공항", "숙소", "식당", "교통", "쇼핑", "긴급상황"};
     }
 
-    private void selectScenario(TextView chosen) {
-        for (int i = 0; i < scenarioRow.getChildCount(); i++) {
-            View v = scenarioRow.getChildAt(i);
-            if (!(v instanceof TextView)) continue;
+    private String defaultScenario(String category) {
+        if ("업무용".equals(category)) return "민원안내";
+        if ("일상용".equals(category)) return "인사";
+        return "식당";
+    }
 
-            TextView t = (TextView) v;
-            boolean active = t == chosen;
-            t.setTextColor(active ? WHITE : NAVY);
-            t.setBackground(round(
-                    active ? TEAL : WHITE,
-                    18,
-                    BORDER,
-                    1
-            ));
+    private String scenarioIcon(String scenario) {
+        switch (scenario) {
+            case "민원안내": return "☑";
+            case "서류작성": return "▤";
+            case "대기·호출": return "◷";
+            case "연락·재방문": return "☎";
+            case "공항": return "✈";
+            case "숙소": return "▰";
+            case "식당": return "🍴";
+            case "교통": return "▣";
+            case "쇼핑": return "▢";
+            case "긴급상황": return "⚠";
+            case "인사": return "☺";
+            case "소개": return "●";
+            case "약속·시간": return "◷";
+            case "식사": return "🍴";
+            case "길찾기": return "⌖";
+            case "부탁·대화": return "☏";
+            default: return "•";
         }
     }
 
