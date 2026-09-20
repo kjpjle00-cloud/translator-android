@@ -571,6 +571,7 @@ public class MainActivity extends Activity {
                 new TranslationEngine.Callback() {
                     @Override
                     public void onSuccess(String translatedText) {
+                        autoConversationEngine.suppressPlaybackEcho(translatedText);
                         runOnUiThread(() -> {
                             button.setText("🔊");
                             button.setEnabled(true);
@@ -892,7 +893,7 @@ public class MainActivity extends Activity {
         card.addView(top);
 
         TextView guide = text(
-                "선택한 두 언어를 자동 감지해 번역합니다. 같은 사람이 연속으로 말해도 됩니다.",
+                "선택한 두 언어만 판정합니다. 애매하거나 말이 겹치면 번역하지 않고 다시 듣습니다.",
                 10,
                 MUTED,
                 false
@@ -1057,7 +1058,14 @@ public class MainActivity extends Activity {
             return;
         }
 
-        RecognitionDecision decision = decideRecognition(rawText, detectedTag);
+        RecognitionDecision decision = decisionFromDetectedTag(rawText, detectedTag);
+        if (decision == null) {
+            runOnUiThread(() ->
+                    autoStatus.setText("언어 판단 불확실 · 다시 말씀해 주세요.")
+            );
+            autoConversationEngine.resumeAfterProcessing();
+            return;
+        }
 
         AppLanguage source = decision.fromMyLanguage ? myLanguage : otherLanguage;
         AppLanguage target = decision.fromMyLanguage ? otherLanguage : myLanguage;
@@ -1119,6 +1127,36 @@ public class MainActivity extends Activity {
                     }
                 }
         );
+    }
+
+    private RecognitionDecision decisionFromDetectedTag(
+            String rawText,
+            String detectedTag
+    ) {
+        if (rawText == null || rawText.trim().isEmpty()
+                || detectedTag == null || detectedTag.trim().isEmpty()) {
+            return null;
+        }
+
+        String detected = detectedTag.toLowerCase(Locale.ROOT);
+        String myCode = myLanguage.code.toLowerCase(Locale.ROOT);
+        String otherCode = otherLanguage.code.toLowerCase(Locale.ROOT);
+
+        boolean mine = detected.startsWith(myCode);
+        boolean other = detected.startsWith(otherCode);
+
+        if (myLanguage.code.equals("tl") && detected.startsWith("fil")) {
+            mine = true;
+        }
+        if (otherLanguage.code.equals("tl") && detected.startsWith("fil")) {
+            other = true;
+        }
+
+        if (mine == other) {
+            return null;
+        }
+
+        return new RecognitionDecision(rawText.trim(), mine);
     }
 
     private RecognitionDecision decideRecognition(String rawText, String detectedTag) {

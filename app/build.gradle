@@ -10,8 +10,8 @@ android {
         applicationId 'com.kjpjle00.dailytranslator'
         minSdk 28
         targetSdk 36
-        versionCode 6
-        versionName '0.6.0-speech-model'
+        versionCode 7
+        versionName '0.7.0-language-lock'
     }
 
     signingConfigs {
