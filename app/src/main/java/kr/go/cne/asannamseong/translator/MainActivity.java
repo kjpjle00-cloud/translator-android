@@ -134,7 +134,7 @@ public class MainActivity extends Activity {
                 if (url.startsWith(APP_URL)) injectNativeBridgeJs();
             }
         });
-        webView.loadUrl(APP_URL + "?native=1.0-test2b1-auto19");
+        webView.loadUrl(APP_URL + "?native=1.0-test2b1-auto20");
     }
 
     private void initTts() {
@@ -618,7 +618,7 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public String appVersion() { return "1.0-test2b1-auto19"; }
+        public String appVersion() { return "1.0-test2b1-auto20"; }
     }
 
     @Override
@@ -780,7 +780,7 @@ public class MainActivity extends Activity {
             window.__primeRealtimeTranslation(snapshot,this.side);
           }
         }catch(e){ console.warn('realtime prime',e); }
-      },350);
+      },220);
     };
 
     SS.prototype.arm=function(){
@@ -953,7 +953,7 @@ public class MainActivity extends Activity {
         this.__rtShow();
       }
 
-      this.finalTimer=setTimeout(()=>this.finish(),650);
+      this.finalTimer=setTimeout(()=>this.finish(),350);
       try{
         if(this.recognition)this.recognition.stop();
         else this.finish();
@@ -1206,6 +1206,22 @@ public class MainActivity extends Activity {
       .native-manual-btn{border:1px solid #cfdee6;background:#fff;color:#244b66;border-radius:14px;padding:12px 8px;font-size:15px;font-weight:800}
       .native-auto-help{font-size:12px;color:#728694;text-align:center;margin-top:9px}
       .speech-dock{display:none!important}
+      body .speech-dock{display:none!important}
+      body[data-page="conversation"] .workspace-heading{margin:4px 8px!important;padding:4px 0!important}
+      body[data-page="conversation"] .conversation-turn{margin:4px 8px!important}
+      body[data-page="conversation"] .bubble-pair{gap:6px!important}
+      body[data-page="conversation"] .message-bubble{padding:10px!important;min-height:0!important}
+      body[data-page="conversation"] .speechtext{max-height:84px!important;overflow:auto!important}
+      body[data-page="conversation"] .source-bubble .speechtext,body[data-page="conversation"] .target-bubble .speechtext{min-height:0!important}
+      .native-mode-tabs{grid-template-columns:repeat(3,minmax(0,1fr))!important}
+      .native-mode-btn{display:block!important;visibility:visible!important;white-space:nowrap}
+      #nativePhrasePanel{margin:0 auto 10px;max-width:1180px;padding:0 14px;box-sizing:border-box}
+      .native-phrase-card{background:#fff;border:1px solid #dce8ee;border-radius:18px;padding:11px 12px;box-shadow:0 6px 20px rgba(21,54,79,.05)}
+      .native-phrase-title{font-size:15px;font-weight:900;color:#173d57;margin-bottom:8px}
+      .native-phrase-row{display:flex;gap:7px;overflow-x:auto;padding-bottom:1px;scrollbar-width:none}
+      .native-phrase-row::-webkit-scrollbar{display:none}
+      .native-phrase-btn{flex:0 0 auto;border:1px solid #bfe0e4;background:#f7fcfc;color:#155467;border-radius:999px;padding:9px 12px;font-size:13px;font-weight:800;white-space:nowrap}
+      .native-phrase-btn:active{background:#ddf4f1;color:#087f7d}
       .native-manual-tools{margin-top:12px;color:#486275}
       .native-manual-tools summary{cursor:pointer;font-size:13px}
       #nativeScenarioPanel,#nativeAutoPanel{display:none}
@@ -1271,6 +1287,13 @@ public class MainActivity extends Activity {
         </details><div class="native-auto-help">자동대화에서는 번역 음성이 끝나면 상대방 차례를 자동으로 듣습니다.</div>
       </div>
     `;
+    const phrasePanel=document.createElement('section');
+    phrasePanel.id='nativePhrasePanel';
+    phrasePanel.innerHTML='<div class="native-phrase-card"><div class="native-phrase-title">자주 쓰는 문장</div><div id="nativeQuickPhraseRow" class="native-phrase-row" aria-label="자주 쓰는 문장"></div></div>';
+    const phraseAnchor=document.querySelector('.workspace-heading');
+    if(phraseAnchor)phraseAnchor.parentNode.insertBefore(phrasePanel,phraseAnchor);
+    else autoPanel.insertAdjacentElement('afterend',phrasePanel);
+
     const workspaceHeading=document.querySelector('.workspace-heading');
     if(workspaceHeading)workspaceHeading.parentNode.insertBefore(autoPanel,workspaceHeading);
     else languageBar.insertAdjacentElement('afterend',autoPanel);
@@ -1326,6 +1349,32 @@ public class MainActivity extends Activity {
       });
     }
 
+    const phraseSets={
+      work:['안녕하세요','잠시만 기다려 주세요','다시 말씀해 주세요','이 서류가 필요합니다','어디에서 신청하나요?'],
+      travel:['안녕하세요','이거 하나 주세요','카드 돼요?','이거 안 맵게 해주세요','화장실이 어디예요?'],
+      daily:['안녕하세요','괜찮아요','잠깐만요','내일 다시 와요','도와주세요']
+    };
+    function renderQuickPhrases(){
+      const row=document.getElementById('nativeQuickPhraseRow');
+      if(!row)return;
+      row.replaceChildren();
+      (phraseSets[mode]||phraseSets.work).forEach(text=>{
+        const b=document.createElement('button');
+        b.type='button'; b.className='native-phrase-btn'; b.textContent=text;
+        b.onclick=()=>{
+          try{window.setRecognitionContext(mode);}catch(e){}
+          const input=document.getElementById('manualKoreanText');
+          if(input)input.value=text;
+          if(typeof translateStaffText==='function'){
+            translateStaffText(text,{autoSpeak:true,autoFlow:autoRunning()});
+          }else if(input){
+            input.dispatchEvent(new Event('input',{bubbles:true}));
+          }
+        };
+        row.appendChild(b);
+      });
+    }
+
     function setMode(next){
       next=safeScenarioMode(next);
       if(mode!==next)stopAutoBeforeContextChange();
@@ -1335,6 +1384,7 @@ public class MainActivity extends Activity {
       panel.querySelectorAll('.native-mode-btn').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));
       detail='';
       renderDetails();
+      renderQuickPhrases();
       syncStatus();
     }
 
@@ -1376,6 +1426,17 @@ public class MainActivity extends Activity {
     if(dock){
       new MutationObserver(syncStatus).observe(dock,{childList:true,subtree:true,characterData:true});
     }
+
+    try{
+      if(typeof scheduleAutoTurn==='function'&&!window.__auto20FastTurn){
+        const nativeScheduleAutoTurn=scheduleAutoTurn;
+        window.__auto20FastTurn=true;
+        scheduleAutoTurn=function(side,delay){
+          const requested=Number(delay);
+          return nativeScheduleAutoTurn(side,Math.min(Number.isFinite(requested)&&requested>0?requested:360,360));
+        };
+      }
+    }catch(e){}
 
     if(typeof setConversationMode==='function')setConversationMode('auto');
     for(const id of ['staffHeardText','heardText']){
