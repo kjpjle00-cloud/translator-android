@@ -1345,7 +1345,7 @@ public class MainActivity extends Activity {
       autoBadge.textContent=running?'● 자동대화 진행 중':'● 대기 중';
       const dock=document.getElementById('dockStatus');
       const t=(dock&&dock.textContent||'').trim();
-      const clean = (!t || /버튼을 누르고|통역 연결 확인 필요|듣는 중 · 문장이 확정되면 표시합니다[.]/.test(t));
+      const clean = (!t || /버튼을 누르고|통역 연결 확인 필요|듣는 중 · 문장이 확정되면 표시합니다\./.test(t));
       autoStatus.textContent=clean ? (running?'상대방 말씀을 듣고 있습니다.':'언어와 상황을 선택한 뒤 자동대화를 시작하세요.') : t;
     }
 
