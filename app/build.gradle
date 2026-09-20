@@ -10,7 +10,7 @@ android {
         applicationId 'kr.go.cne.asannamseong.translator'
         minSdk 28
         targetSdk 36
-        versionCode 100
+        versionCode 2026092001
         versionName '1.0-test2b1-auto29'
     }
 
