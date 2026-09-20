@@ -28,7 +28,8 @@ public class AutoConversationEngine {
     private final Handler handler = new Handler(Looper.getMainLooper());
 
     private SpeechRecognizer recognizer;
-    private Intent recognizerIntent;
+    private AppLanguage firstLanguage = AppLanguage.KOREAN;
+    private AppLanguage secondLanguage = AppLanguage.ENGLISH;
 
     private boolean active = false;
     private boolean processing = false;
@@ -41,10 +42,18 @@ public class AutoConversationEngine {
         createRecognizer();
     }
 
-    private void createRecognizer() {
-        if (!SpeechRecognizer.isRecognitionAvailable(context)) {
-            return;
+    public void setLanguagePair(AppLanguage first, AppLanguage second) {
+        if (first != null) firstLanguage = first;
+        if (second != null) secondLanguage = second;
+
+        if (active) {
+            stop();
+            start();
         }
+    }
+
+    private void createRecognizer() {
+        if (!SpeechRecognizer.isRecognitionAvailable(context)) return;
 
         recognizer = SpeechRecognizer.createSpeechRecognizer(context);
         recognizer.setRecognitionListener(new RecognitionListener() {
@@ -77,14 +86,12 @@ public class AutoConversationEngine {
                         || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
                         || error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) {
                     if (listener != null) listener.onIdleRetry();
-                    scheduleRestart(300);
+                    scheduleRestart(250);
                     return;
                 }
 
-                if (listener != null) {
-                    listener.onError(errorText(error));
-                }
-                scheduleRestart(700);
+                if (listener != null) listener.onError(errorText(error));
+                scheduleRestart(650);
             }
 
             @Override
@@ -95,7 +102,7 @@ public class AutoConversationEngine {
                         results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
 
                 if (list == null || list.isEmpty() || list.get(0).trim().isEmpty()) {
-                    scheduleRestart(250);
+                    scheduleRestart(220);
                     return;
                 }
 
@@ -104,9 +111,7 @@ public class AutoConversationEngine {
                 String language = detectedLanguage;
                 detectedLanguage = null;
 
-                if (listener != null) {
-                    listener.onUtterance(text, language);
-                }
+                if (listener != null) listener.onUtterance(text, language);
             }
 
             @Override
@@ -126,29 +131,33 @@ public class AutoConversationEngine {
             @Override
             public void onLanguageDetection(Bundle results) {
                 if (Build.VERSION.SDK_INT >= 34 && results != null) {
-                    detectedLanguage =
-                            results.getString(SpeechRecognizer.DETECTED_LANGUAGE);
+                    String lang = results.getString(SpeechRecognizer.DETECTED_LANGUAGE);
+                    if (lang != null && !lang.trim().isEmpty()) {
+                        detectedLanguage = lang;
+                    }
                 }
             }
         });
+    }
 
-        recognizerIntent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-        recognizerIntent.putExtra(
+    private Intent buildRecognizerIntent() {
+        Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+        intent.putExtra(
                 RecognizerIntent.EXTRA_LANGUAGE_MODEL,
                 RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
         );
-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-        recognizerIntent.putExtra(
+        intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
+        intent.putExtra(
                 RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
                 1800L
         );
-        recognizerIntent.putExtra(
+        intent.putExtra(
                 RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS,
-                1200L
+                1100L
         );
 
         if (Build.VERSION.SDK_INT >= 33) {
-            recognizerIntent.putExtra(
+            intent.putExtra(
                     RecognizerIntent.EXTRA_ENABLE_FORMATTING,
                     RecognizerIntent.FORMATTING_OPTIMIZE_LATENCY
             );
@@ -156,27 +165,35 @@ public class AutoConversationEngine {
 
         if (Build.VERSION.SDK_INT >= 34) {
             ArrayList<String> languages =
-                    new ArrayList<>(Arrays.asList("ko-KR", "en-US"));
+                    new ArrayList<>(Arrays.asList(
+                            firstLanguage.speechTag,
+                            secondLanguage.speechTag
+                    ));
 
-            recognizerIntent.putExtra(
+            intent.putExtra(
                     RecognizerIntent.EXTRA_ENABLE_LANGUAGE_DETECTION,
                     true
             );
-            recognizerIntent.putStringArrayListExtra(
+            intent.putStringArrayListExtra(
                     RecognizerIntent.EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES,
                     languages
             );
-            recognizerIntent.putExtra(
+            intent.putExtra(
                     RecognizerIntent.EXTRA_ENABLE_LANGUAGE_SWITCH,
                     RecognizerIntent.LANGUAGE_SWITCH_QUICK_RESPONSE
             );
-            recognizerIntent.putStringArrayListExtra(
+            intent.putStringArrayListExtra(
                     RecognizerIntent.EXTRA_LANGUAGE_SWITCH_ALLOWED_LANGUAGES,
                     languages
             );
         } else {
-            recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ko-KR");
+            intent.putExtra(
+                    RecognizerIntent.EXTRA_LANGUAGE,
+                    firstLanguage.speechTag
+            );
         }
+
+        return intent;
     }
 
     public boolean isAvailable() {
@@ -212,7 +229,7 @@ public class AutoConversationEngine {
     public void resumeAfterProcessing() {
         if (!active || destroyed) return;
         processing = false;
-        scheduleRestart(180);
+        scheduleRestart(140);
     }
 
     private void scheduleRestart(long delayMs) {
@@ -231,12 +248,12 @@ public class AutoConversationEngine {
         }
 
         try {
-            recognizer.startListening(recognizerIntent);
+            recognizer.startListening(buildRecognizerIntent());
         } catch (Exception e) {
             if (listener != null) {
                 listener.onError("음성 인식을 다시 시작하는 중입니다.");
             }
-            scheduleRestart(600);
+            scheduleRestart(500);
         }
     }
 

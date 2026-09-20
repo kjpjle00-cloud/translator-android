@@ -4,6 +4,7 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -24,7 +25,10 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
 public class MainActivity extends Activity {
 
@@ -45,9 +49,12 @@ public class MainActivity extends Activity {
 
     private final String[] categories = {"업무용", "여행용", "일상용"};
 
+    private final Map<String, String> englishLoanwordFix = new HashMap<>();
+
     private BasicPhraseStore phraseStore;
     private TranslationEngine translationEngine;
     private AutoConversationEngine autoConversationEngine;
+    private SharedPreferences prefs;
 
     private LinearLayout categoryRow;
     private LinearLayout scenarioRow;
@@ -57,13 +64,18 @@ public class MainActivity extends Activity {
     private TextView phraseToggle;
     private TextView favoriteFilterButton;
 
+    private TextView myLanguageButton;
+    private TextView otherLanguageButton;
+
     private TextView autoBadge;
     private TextView autoStatus;
     private TextView autoButton;
     private TextView micButton;
 
+    private TextView mySourceLabel;
     private TextView mySourceText;
     private TextView myTranslatedText;
+    private TextView otherSourceLabel;
     private TextView otherSourceText;
     private TextView otherTranslatedText;
 
@@ -73,13 +85,33 @@ public class MainActivity extends Activity {
     private boolean phraseExpanded = false;
     private boolean autoStartAfterPermission = false;
 
+    private AppLanguage myLanguage = AppLanguage.KOREAN;
+    private AppLanguage otherLanguage = AppLanguage.ENGLISH;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        initLoanwordFixes();
+
+        prefs = getSharedPreferences("daily_translator_settings", MODE_PRIVATE);
+        myLanguage = AppLanguage.byCode(
+                prefs.getString("my_language", AppLanguage.KOREAN.code)
+        );
+        otherLanguage = AppLanguage.byCode(
+                prefs.getString("other_language", AppLanguage.ENGLISH.code)
+        );
+
+        if (myLanguage.code.equals(otherLanguage.code)) {
+            otherLanguage = AppLanguage.ENGLISH;
+            if (myLanguage.code.equals(AppLanguage.ENGLISH.code)) {
+                otherLanguage = AppLanguage.KOREAN;
+            }
+        }
+
         phraseStore = new BasicPhraseStore(this);
         translationEngine = new TranslationEngine(this);
-        translationEngine.preload();
+        translationEngine.preparePair(myLanguage, otherLanguage);
 
         autoConversationEngine = new AutoConversationEngine(
                 this,
@@ -88,7 +120,12 @@ public class MainActivity extends Activity {
                     public void onListening() {
                         runOnUiThread(() -> {
                             if (autoStatus != null) {
-                                autoStatus.setText("듣는 중 · 한국어/영어 자동 감지");
+                                autoStatus.setText(
+                                        "듣는 중 · "
+                                                + myLanguage.name
+                                                + " / "
+                                                + otherLanguage.name
+                                );
                             }
                         });
                     }
@@ -126,6 +163,7 @@ public class MainActivity extends Activity {
                     }
                 }
         );
+        autoConversationEngine.setLanguagePair(myLanguage, otherLanguage);
 
         getWindow().setStatusBarColor(Color.WHITE);
         getWindow().setNavigationBarColor(Color.WHITE);
@@ -197,7 +235,29 @@ public class MainActivity extends Activity {
         refreshScenarios();
         refreshPhrases();
         updatePhraseVisibility();
+        updateLanguageUi();
         updateAutoUi();
+    }
+
+    private void initLoanwordFixes() {
+        englishLoanwordFix.put("굿모닝", "Good morning");
+        englishLoanwordFix.put("굿 모닝", "Good morning");
+        englishLoanwordFix.put("헬로", "Hello");
+        englishLoanwordFix.put("헬로우", "Hello");
+        englishLoanwordFix.put("하이", "Hi");
+        englishLoanwordFix.put("땡큐", "Thank you");
+        englishLoanwordFix.put("쌩큐", "Thank you");
+        englishLoanwordFix.put("쏘리", "Sorry");
+        englishLoanwordFix.put("쏘리요", "Sorry");
+        englishLoanwordFix.put("굿나잇", "Good night");
+        englishLoanwordFix.put("굿 나잇", "Good night");
+        englishLoanwordFix.put("굿이브닝", "Good evening");
+        englishLoanwordFix.put("굿 이브닝", "Good evening");
+        englishLoanwordFix.put("바이", "Bye");
+        englishLoanwordFix.put("바이바이", "Bye bye");
+        englishLoanwordFix.put("익스큐즈미", "Excuse me");
+        englishLoanwordFix.put("익스큐즈 미", "Excuse me");
+        englishLoanwordFix.put("오케이", "Okay");
     }
 
     private View buildHeader() {
@@ -212,7 +272,7 @@ public class MainActivity extends Activity {
         LinearLayout titleBox = vbox();
         titleBox.setPadding(dp(9), 0, 0, 0);
         TextView title = text("일상번역기", 24, NAVY, true);
-        TextView sub = text("업무 · 여행 · 일상  |  빠른 번역 + 지속 자동대화", 11, MUTED, false);
+        TextView sub = text("다국어 선택 · 빠른 번역 · 지속 자동대화", 11, MUTED, false);
         titleBox.addView(title);
         titleBox.addView(space(1));
         titleBox.addView(sub);
@@ -317,7 +377,6 @@ public class MainActivity extends Activity {
 
         LinearLayout header = hbox();
         header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setPadding(0, dp(2), 0, dp(2));
 
         LinearLayout titleBox = vbox();
         TextView title = text("기본 멘트", 17, TEXT, true);
@@ -334,20 +393,13 @@ public class MainActivity extends Activity {
         phraseToggle.setPadding(dp(10), dp(7), dp(10), dp(7));
         header.addView(phraseToggle);
 
-        header.setOnClickListener(v -> {
+        View.OnClickListener toggle = v -> {
             phraseExpanded = !phraseExpanded;
             updatePhraseVisibility();
-            if (phraseExpanded) {
-                warmCurrentPhrases();
-            }
-        });
-        phraseToggle.setOnClickListener(v -> {
-            phraseExpanded = !phraseExpanded;
-            updatePhraseVisibility();
-            if (phraseExpanded) {
-                warmCurrentPhrases();
-            }
-        });
+            if (phraseExpanded) warmCurrentPhrases();
+        };
+        header.setOnClickListener(toggle);
+        phraseToggle.setOnClickListener(toggle);
 
         card.addView(header);
 
@@ -432,9 +484,7 @@ public class MainActivity extends Activity {
             if (count < items.size()) phraseList.addView(space(6));
         }
 
-        if (phraseExpanded) {
-            warmCurrentPhrases();
-        }
+        if (phraseExpanded) warmCurrentPhrases();
     }
 
     private View buildPhraseRow(BasicPhraseStore.Phrase phrase) {
@@ -513,8 +563,10 @@ public class MainActivity extends Activity {
         button.setEnabled(false);
         button.setText("…");
 
-        translationEngine.translateKoreanToEnglish(
+        translationEngine.translateAndSpeak(
                 phrase.text,
+                AppLanguage.KOREAN,
+                otherLanguage,
                 true,
                 new TranslationEngine.Callback() {
                     @Override
@@ -548,11 +600,19 @@ public class MainActivity extends Activity {
     private void warmCurrentPhrases() {
         List<BasicPhraseStore.Phrase> items =
                 phraseStore.get(selectedCategory, selectedScenario, favoritesOnly);
+
         ArrayList<String> texts = new ArrayList<>();
         for (BasicPhraseStore.Phrase p : items) {
-            if (p.text != null && !p.text.trim().isEmpty()) texts.add(p.text);
+            if (p.text != null && !p.text.trim().isEmpty()) {
+                texts.add(p.text);
+            }
         }
-        translationEngine.prewarmKoreanToEnglish(texts);
+
+        translationEngine.prewarm(
+                texts,
+                AppLanguage.KOREAN,
+                otherLanguage
+        );
     }
 
     private void showPhraseEditor(BasicPhraseStore.Phrase phrase) {
@@ -629,37 +689,130 @@ public class MainActivity extends Activity {
         card.setPadding(dp(10), dp(9), dp(10), dp(9));
         card.setBackground(round(WHITE, 16, BORDER, 1));
 
-        LinearLayout mine = languageBox("내 언어", "한국어");
-        LinearLayout other = languageBox("상대 언어", "영어");
+        myLanguageButton = languageBox("내 언어", myLanguage.name);
+        otherLanguageButton = languageBox("상대 언어", otherLanguage.name);
+
+        myLanguageButton.setOnClickListener(v -> showLanguagePicker(true));
+        otherLanguageButton.setOnClickListener(v -> showLanguagePicker(false));
 
         TextView swap = text("⇄", 22, BLUE, true);
         swap.setGravity(Gravity.CENTER);
         swap.setBackground(round(PALE_BLUE, 21, PALE_BLUE, 0));
+        swap.setOnClickListener(v -> {
+            AppLanguage temp = myLanguage;
+            myLanguage = otherLanguage;
+            otherLanguage = temp;
+            onLanguageChanged();
+        });
 
-        card.addView(mine,
+        card.addView(myLanguageButton,
                 new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         LinearLayout.LayoutParams sp = lp(dp(42), dp(42));
         sp.setMargins(dp(6), 0, dp(6), 0);
         card.addView(swap, sp);
 
-        card.addView(other,
+        card.addView(otherLanguageButton,
                 new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         return card;
     }
 
-    private LinearLayout languageBox(String label, String language) {
-        LinearLayout box = vbox();
-        box.setPadding(dp(10), dp(7), dp(10), dp(7));
+    private TextView languageBox(String label, String language) {
+        TextView box = text(label + "\n" + language + "  ⌄", 13, TEXT, true);
+        box.setGravity(Gravity.CENTER_VERTICAL);
+        box.setPadding(dp(10), dp(8), dp(10), dp(8));
         box.setBackground(round(Color.rgb(252, 254, 255), 12, BORDER, 1));
-
-        TextView l = text(label, 10, MUTED, false);
-        TextView v = text(language + "  ⌄", 16, TEXT, true);
-
-        box.addView(l);
-        box.addView(space(2));
-        box.addView(v);
         return box;
+    }
+
+    private void showLanguagePicker(boolean forMine) {
+        String[] names = new String[AppLanguage.ALL.size()];
+        for (int i = 0; i < AppLanguage.ALL.size(); i++) {
+            names[i] = AppLanguage.ALL.get(i).name;
+        }
+
+        AppLanguage current = forMine ? myLanguage : otherLanguage;
+
+        new AlertDialog.Builder(this)
+                .setTitle(forMine ? "내 언어 선택" : "상대 언어 선택")
+                .setSingleChoiceItems(
+                        names,
+                        AppLanguage.indexOf(current),
+                        (dialog, which) -> {
+                            AppLanguage chosen = AppLanguage.ALL.get(which);
+
+                            if (forMine) {
+                                if (chosen.code.equals(otherLanguage.code)) {
+                                    Toast.makeText(
+                                            this,
+                                            "내 언어와 상대 언어는 다르게 선택해 주세요.",
+                                            Toast.LENGTH_SHORT
+                                    ).show();
+                                    return;
+                                }
+                                myLanguage = chosen;
+                            } else {
+                                if (chosen.code.equals(myLanguage.code)) {
+                                    Toast.makeText(
+                                            this,
+                                            "내 언어와 상대 언어는 다르게 선택해 주세요.",
+                                            Toast.LENGTH_SHORT
+                                    ).show();
+                                    return;
+                                }
+                                otherLanguage = chosen;
+                            }
+
+                            dialog.dismiss();
+                            onLanguageChanged();
+                        }
+                )
+                .setNegativeButton("취소", null)
+                .show();
+    }
+
+    private void onLanguageChanged() {
+        prefs.edit()
+                .putString("my_language", myLanguage.code)
+                .putString("other_language", otherLanguage.code)
+                .apply();
+
+        translationEngine.stopSpeaking();
+        translationEngine.preparePair(myLanguage, otherLanguage);
+        autoConversationEngine.setLanguagePair(myLanguage, otherLanguage);
+
+        updateLanguageUi();
+        refreshPhrases();
+
+        if (autoConversationEngine.isActive()) {
+            updateAutoUi();
+        }
+    }
+
+    private void updateLanguageUi() {
+        if (myLanguageButton != null) {
+            myLanguageButton.setText("내 언어\n" + myLanguage.name + "  ⌄");
+        }
+        if (otherLanguageButton != null) {
+            otherLanguageButton.setText("상대 언어\n" + otherLanguage.name + "  ⌄");
+        }
+
+        if (mySourceLabel != null) {
+            mySourceLabel.setText(
+                    "● 내 말 · "
+                            + myLanguage.name
+                            + " → "
+                            + otherLanguage.name
+            );
+        }
+        if (otherSourceLabel != null) {
+            otherSourceLabel.setText(
+                    "● 상대방 말 · "
+                            + otherLanguage.name
+                            + " → "
+                            + myLanguage.name
+            );
+        }
     }
 
     private View buildAudioRouteCard() {
@@ -674,7 +827,7 @@ public class MainActivity extends Activity {
         LinearLayout row = hbox();
 
         TextView speaker = pill(
-                "🔊 한국어 → 영어",
+                "🔊 내 말 번역음",
                 11,
                 NAVY,
                 PALE_BLUE,
@@ -685,7 +838,7 @@ public class MainActivity extends Activity {
         speaker.setPadding(dp(8), dp(8), dp(8), dp(8));
 
         TextView earphone = pill(
-                "🎧 영어 → 한국어",
+                "🎧 상대방 번역음",
                 11,
                 TEAL_DARK,
                 PALE_TEAL,
@@ -739,7 +892,7 @@ public class MainActivity extends Activity {
         card.addView(top);
 
         TextView guide = text(
-                "시작하면 종료할 때까지 계속 듣습니다. 같은 사람이 이어서 말해도 됩니다.",
+                "선택한 두 언어를 자동 감지해 번역합니다. 같은 사람이 연속으로 말해도 됩니다.",
                 10,
                 MUTED,
                 false
@@ -768,7 +921,7 @@ public class MainActivity extends Activity {
         card.addView(autoStatus);
 
         TextView note = text(
-                "약 1.8초 침묵 후 한 문장으로 처리하고, 재생이 끝나면 자동으로 다시 듣습니다.",
+                "약 1.8초 침묵 후 처리 · 재생이 끝나면 자동으로 다시 듣습니다.",
                 9,
                 Color.rgb(119, 139, 151),
                 false
@@ -795,8 +948,8 @@ public class MainActivity extends Activity {
 
         String[][] steps = {
                 {"🎙", "자동 듣기"},
+                {"◎", "언어 감지"},
                 {"▤", "즉시 번역"},
-                {"🔊", "음성 재생"},
                 {"↻", "다시 듣기"}
         };
 
@@ -855,7 +1008,8 @@ public class MainActivity extends Activity {
             return;
         }
 
-        translationEngine.preload();
+        translationEngine.preparePair(myLanguage, otherLanguage);
+        autoConversationEngine.setLanguagePair(myLanguage, otherLanguage);
         autoConversationEngine.start();
         updateAutoUi();
     }
@@ -874,7 +1028,12 @@ public class MainActivity extends Activity {
                     Color.TRANSPARENT,
                     0
             ));
-            autoStatus.setText("자동대화 유지 중 · 말씀하세요");
+            autoStatus.setText(
+                    "자동대화 유지 중 · "
+                            + myLanguage.name
+                            + " / "
+                            + otherLanguage.name
+            );
             autoButton.setText("■ 자동대화 종료");
             micButton.setAlpha(1f);
         } else {
@@ -892,81 +1051,247 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void handleAutoUtterance(String source, String languageTag) {
-        if (source == null || source.trim().isEmpty()) {
+    private void handleAutoUtterance(String rawText, String detectedTag) {
+        if (rawText == null || rawText.trim().isEmpty()) {
             autoConversationEngine.resumeAfterProcessing();
             return;
         }
 
-        final boolean korean = isKorean(languageTag, source);
+        RecognitionDecision decision = decideRecognition(rawText, detectedTag);
+
+        AppLanguage source = decision.fromMyLanguage ? myLanguage : otherLanguage;
+        AppLanguage target = decision.fromMyLanguage ? otherLanguage : myLanguage;
+        String sourceText = decision.text;
 
         runOnUiThread(() -> {
-            autoStatus.setText("번역 중 · " + source);
-            if (korean) {
-                mySourceText.setText(source);
+            autoStatus.setText(
+                    source.name + " 감지 · 번역 중"
+            );
+
+            if (decision.fromMyLanguage) {
+                mySourceText.setText(sourceText);
                 myTranslatedText.setText("번역 중...");
             } else {
-                otherSourceText.setText(source);
+                otherSourceText.setText(sourceText);
                 otherTranslatedText.setText("번역 중...");
             }
         });
 
-        TranslationEngine.Callback callback = new TranslationEngine.Callback() {
-            @Override
-            public void onSuccess(String translatedText) {
-                runOnUiThread(() -> {
-                    if (korean) {
-                        myTranslatedText.setText(translatedText);
-                    } else {
-                        otherTranslatedText.setText(translatedText);
+        translationEngine.translateAndSpeak(
+                sourceText,
+                source,
+                target,
+                true,
+                new TranslationEngine.Callback() {
+                    @Override
+                    public void onSuccess(String translatedText) {
+                        runOnUiThread(() -> {
+                            if (decision.fromMyLanguage) {
+                                myTranslatedText.setText(translatedText);
+                            } else {
+                                otherTranslatedText.setText(translatedText);
+                            }
+                            autoStatus.setText("음성 재생 중 · " + target.name);
+                        });
                     }
-                    autoStatus.setText("음성 재생 중");
-                });
-            }
 
-            @Override
-            public void onError(String message) {
-                runOnUiThread(() -> {
-                    if (korean) {
-                        myTranslatedText.setText("번역 실패: " + message);
-                    } else {
-                        otherTranslatedText.setText("번역 실패: " + message);
+                    @Override
+                    public void onError(String message) {
+                        runOnUiThread(() -> {
+                            if (decision.fromMyLanguage) {
+                                myTranslatedText.setText("번역 실패: " + message);
+                            } else {
+                                otherTranslatedText.setText("번역 실패: " + message);
+                            }
+                            autoStatus.setText("자동대화 유지 중 · 다시 듣기");
+                        });
+                        autoConversationEngine.resumeAfterProcessing();
                     }
-                    autoStatus.setText("자동대화 유지 중 · 다시 듣기");
-                });
-                autoConversationEngine.resumeAfterProcessing();
-            }
 
-            @Override
-            public void onSpeechComplete() {
-                runOnUiThread(() -> {
-                    if (autoConversationEngine.isActive()) {
-                        autoStatus.setText("자동대화 유지 중 · 말씀하세요");
+                    @Override
+                    public void onSpeechComplete() {
+                        runOnUiThread(() -> {
+                            if (autoConversationEngine.isActive()) {
+                                autoStatus.setText("자동대화 유지 중 · 말씀하세요");
+                            }
+                        });
+                        autoConversationEngine.resumeAfterProcessing();
                     }
-                });
-                autoConversationEngine.resumeAfterProcessing();
-            }
-        };
-
-        if (korean) {
-            translationEngine.translateKoreanToEnglish(source, true, callback);
-        } else {
-            translationEngine.translateEnglishToKorean(source, true, callback);
-        }
+                }
+        );
     }
 
-    private boolean isKorean(String languageTag, String textValue) {
-        if (languageTag != null) {
-            String lower = languageTag.toLowerCase();
-            if (lower.startsWith("ko")) return true;
-            if (lower.startsWith("en")) return false;
+    private RecognitionDecision decideRecognition(String rawText, String detectedTag) {
+        String textValue = rawText.trim();
+
+        // 영어 음성을 한국어 발음으로 잘못 받아 적는 흔한 경우 보정
+        if (otherLanguage.code.equals("en")
+                && myLanguage.code.equals("ko")) {
+            String fixed = englishLoanwordFix.get(textValue);
+            if (fixed != null) {
+                return new RecognitionDecision(fixed, false);
+            }
         }
 
-        for (int i = 0; i < textValue.length(); i++) {
-            char c = textValue.charAt(i);
+        if (myLanguage.code.equals("en")
+                && otherLanguage.code.equals("ko")) {
+            String fixed = englishLoanwordFix.get(textValue);
+            if (fixed != null) {
+                return new RecognitionDecision(fixed, true);
+            }
+        }
+
+        // 문자 형태가 명확한 경우 음성인식기의 잘못된 언어 태그보다 우선
+        String scriptCode = detectScriptLanguage(textValue);
+        if (scriptCode != null) {
+            if (scriptCode.equals(myLanguage.code)) {
+                return new RecognitionDecision(textValue, true);
+            }
+            if (scriptCode.equals(otherLanguage.code)) {
+                return new RecognitionDecision(textValue, false);
+            }
+        }
+
+        // 한쪽이 비라틴 문자, 다른 쪽이 라틴 문자면 라틴 여부로 보완
+        if (isLatinDominant(textValue)) {
+            boolean myLatin = isLatinLanguage(myLanguage.code);
+            boolean otherLatin = isLatinLanguage(otherLanguage.code);
+
+            if (myLatin && !otherLatin) {
+                return new RecognitionDecision(textValue, true);
+            }
+            if (!myLatin && otherLatin) {
+                return new RecognitionDecision(textValue, false);
+            }
+        }
+
+        // Android가 감지한 언어 태그를 선택한 두 언어와만 비교
+        if (detectedTag != null && !detectedTag.trim().isEmpty()) {
+            String detectedCode = detectedTag.toLowerCase(Locale.ROOT);
+
+            if (detectedCode.startsWith(myLanguage.code.toLowerCase(Locale.ROOT))) {
+                return new RecognitionDecision(textValue, true);
+            }
+            if (detectedCode.startsWith(otherLanguage.code.toLowerCase(Locale.ROOT))) {
+                return new RecognitionDecision(textValue, false);
+            }
+
+            // 필리핀 음성 인식에서 fil/tl 표기 차이 허용
+            if (myLanguage.code.equals("tl") && detectedCode.startsWith("fil")) {
+                return new RecognitionDecision(textValue, true);
+            }
+            if (otherLanguage.code.equals("tl") && detectedCode.startsWith("fil")) {
+                return new RecognitionDecision(textValue, false);
+            }
+        }
+
+        // 마지막 보조: 한글이 포함돼 있고 한쪽이 한국어라면 한국어
+        if (containsHangul(textValue)) {
+            if (myLanguage.code.equals("ko")) {
+                return new RecognitionDecision(textValue, true);
+            }
+            if (otherLanguage.code.equals("ko")) {
+                return new RecognitionDecision(textValue, false);
+            }
+        }
+
+        // 판단 불가 시 내 언어로 처리
+        return new RecognitionDecision(textValue, true);
+    }
+
+    private String detectScriptLanguage(String value) {
+        int hangul = 0;
+        int kana = 0;
+        int han = 0;
+        int thai = 0;
+        int cyrillic = 0;
+        int arabic = 0;
+        int devanagari = 0;
+        int letters = 0;
+
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (!Character.isLetter(c)) continue;
+            letters++;
+
+            if (c >= '\uAC00' && c <= '\uD7A3') {
+                hangul++;
+            } else if ((c >= '\u3040' && c <= '\u30FF')) {
+                kana++;
+            } else if (c >= '\u4E00' && c <= '\u9FFF') {
+                han++;
+            } else if (c >= '\u0E00' && c <= '\u0E7F') {
+                thai++;
+            } else if (c >= '\u0400' && c <= '\u04FF') {
+                cyrillic++;
+            } else if (c >= '\u0600' && c <= '\u06FF') {
+                arabic++;
+            } else if (c >= '\u0900' && c <= '\u097F') {
+                devanagari++;
+            }
+        }
+
+        if (letters == 0) return null;
+
+        if (hangul > 0 && hangul * 2 >= letters) return "ko";
+        if (kana > 0) return "ja";
+        if (thai > 0) return "th";
+        if (cyrillic > 0) return "ru";
+        if (arabic > 0) return "ar";
+        if (devanagari > 0) return "hi";
+
+        if (han > 0) {
+            if (myLanguage.code.equals("ja") || otherLanguage.code.equals("ja")) {
+                if (kana > 0) return "ja";
+            }
+            if (myLanguage.code.equals("zh") || otherLanguage.code.equals("zh")) {
+                return "zh";
+            }
+        }
+
+        return null;
+    }
+
+    private boolean containsHangul(String value) {
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
             if (c >= '\uAC00' && c <= '\uD7A3') return true;
         }
         return false;
+    }
+
+    private boolean isLatinDominant(String value) {
+        int latin = 0;
+        int letters = 0;
+
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (!Character.isLetter(c)) continue;
+            letters++;
+
+            Character.UnicodeBlock block = Character.UnicodeBlock.of(c);
+            if (block == Character.UnicodeBlock.BASIC_LATIN
+                    || block == Character.UnicodeBlock.LATIN_1_SUPPLEMENT
+                    || block == Character.UnicodeBlock.LATIN_EXTENDED_A
+                    || block == Character.UnicodeBlock.LATIN_EXTENDED_B) {
+                latin++;
+            }
+        }
+
+        return letters > 0 && latin * 100 / letters >= 70;
+    }
+
+    private boolean isLatinLanguage(String code) {
+        return code.equals("en")
+                || code.equals("es")
+                || code.equals("fr")
+                || code.equals("de")
+                || code.equals("id")
+                || code.equals("tl")
+                || code.equals("vi")
+                || code.equals("pt")
+                || code.equals("it")
+                || code.equals("tr");
     }
 
     private View buildMySpeechCard() {
@@ -974,15 +1299,15 @@ public class MainActivity extends Activity {
         card.setPadding(dp(12), dp(10), dp(12), dp(10));
         card.setBackground(round(PALE_BLUE, 16, Color.rgb(203, 229, 249), 1));
 
-        TextView who = text("● 내 말 · 한국어 → 영어", 12, BLUE, true);
-        card.addView(who);
+        mySourceLabel = text("", 12, BLUE, true);
+        card.addView(mySourceLabel);
         card.addView(space(6));
 
-        mySourceText = text("자동대화를 시작하고 한국어로 말해보세요.", 14, TEXT, true);
+        mySourceText = text("자동대화를 시작하고 말해보세요.", 14, TEXT, true);
         card.addView(mySourceText);
         card.addView(space(5));
 
-        myTranslatedText = text("영어 번역이 여기에 표시됩니다.", 12,
+        myTranslatedText = text("번역 결과가 여기에 표시됩니다.", 12,
                 Color.rgb(52, 87, 119), false);
         card.addView(myTranslatedText);
         return card;
@@ -993,15 +1318,15 @@ public class MainActivity extends Activity {
         card.setPadding(dp(12), dp(10), dp(12), dp(10));
         card.setBackground(round(PALE_GREEN, 16, Color.rgb(205, 236, 213), 1));
 
-        TextView who = text("● 상대방 말 · 영어 → 한국어", 12, GREEN, true);
-        card.addView(who);
+        otherSourceLabel = text("", 12, GREEN, true);
+        card.addView(otherSourceLabel);
         card.addView(space(6));
 
-        otherSourceText = text("상대방이 영어로 말하면 자동으로 인식합니다.", 14, TEXT, true);
+        otherSourceText = text("상대방이 말하면 자동으로 인식합니다.", 14, TEXT, true);
         card.addView(otherSourceText);
         card.addView(space(5));
 
-        otherTranslatedText = text("한국어 번역이 여기에 표시됩니다.", 12,
+        otherTranslatedText = text("번역 결과가 여기에 표시됩니다.", 12,
                 Color.rgb(52, 87, 119), false);
         card.addView(otherTranslatedText);
         return card;
@@ -1203,5 +1528,15 @@ public class MainActivity extends Activity {
         return Math.round(
                 value * getResources().getDisplayMetrics().density
         );
+    }
+
+    private static class RecognitionDecision {
+        final String text;
+        final boolean fromMyLanguage;
+
+        RecognitionDecision(String text, boolean fromMyLanguage) {
+            this.text = text;
+            this.fromMyLanguage = fromMyLanguage;
+        }
     }
 }
