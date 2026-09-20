@@ -4,6 +4,7 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
@@ -11,6 +12,8 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Bundle;
+import android.net.Uri;
+import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -295,6 +298,7 @@ public class MainActivity extends Activity {
 
         TextView settings = pill("⚙ 설정", 12, NAVY, WHITE, BORDER, 12);
         settings.setPadding(dp(10), dp(8), dp(10), dp(8));
+        settings.setOnClickListener(v -> showSettingsDialog());
         row.addView(settings);
         return row;
     }
@@ -1393,6 +1397,83 @@ public class MainActivity extends Activity {
         return card;
     }
 
+    private void showSettingsDialog() {
+        boolean micGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.M
+                || checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                == PackageManager.PERMISSION_GRANTED;
+
+        String[] items = {
+                "내 언어 변경 · " + myLanguage.name,
+                "상대 언어 변경 · " + otherLanguage.name,
+                "마이크 권한 · " + (micGranted ? "허용됨" : "확인 필요"),
+                "음성모델 다시 준비",
+                "Android 앱 권한 설정 열기"
+        };
+
+        new AlertDialog.Builder(this)
+                .setTitle("설정")
+                .setItems(items, (dialog, which) -> {
+                    switch (which) {
+                        case 0:
+                            showLanguagePicker(true);
+                            break;
+                        case 1:
+                            showLanguagePicker(false);
+                            break;
+                        case 2:
+                            checkOrRequestMicrophonePermission();
+                            break;
+                        case 3:
+                            if (autoConversationEngine != null) {
+                                autoConversationEngine.prepareSpeechModels();
+                            }
+                            Toast.makeText(
+                                    this,
+                                    "선택한 언어의 음성모델 준비를 요청했습니다. 자동대화는 모델 확인과 관계없이 계속 들을 수 있습니다.",
+                                    Toast.LENGTH_LONG
+                            ).show();
+                            break;
+                        case 4:
+                            openAndroidAppSettings();
+                            break;
+                        default:
+                            break;
+                    }
+                })
+                .setNegativeButton("닫기", null)
+                .show();
+    }
+
+    private void checkOrRequestMicrophonePermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M
+                || checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                == PackageManager.PERMISSION_GRANTED) {
+            Toast.makeText(this, "마이크 권한이 허용되어 있습니다.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        requestPermissions(
+                new String[]{Manifest.permission.RECORD_AUDIO},
+                REQ_MIC
+        );
+    }
+
+    private void openAndroidAppSettings() {
+        try {
+            Intent intent = new Intent(
+                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:" + getPackageName())
+            );
+            startActivity(intent);
+        } catch (Exception e) {
+            Toast.makeText(
+                    this,
+                    "Android 설정에서 일상번역기의 마이크 권한을 확인해 주세요.",
+                    Toast.LENGTH_LONG
+            ).show();
+        }
+    }
+
     private View buildBottomNav() {
         LinearLayout row = hbox();
         row.setPadding(dp(6), dp(7), dp(6), dp(4));
@@ -1432,6 +1513,11 @@ public class MainActivity extends Activity {
             item.addView(icon);
             item.addView(space(2));
             item.addView(label);
+
+            if ("설정".equals(items[i][1])) {
+                item.setClickable(true);
+                item.setOnClickListener(v -> showSettingsDialog());
+            }
 
             LinearLayout.LayoutParams p =
                     new LinearLayout.LayoutParams(0, dp(52), 1f);

@@ -47,46 +47,90 @@ public final class LanguageDecisionEngine {
         first = code(first);
         second = code(second);
         String speech = code(confidentSpeechLanguage);
-        if (first == null || second == null || first.equals(second)) return hold(text, "invalid_pair");
+
+        if (first == null || second == null || first.equals(second)) {
+            return hold(text, "invalid_pair");
+        }
         if (text.isEmpty()) return hold(text, "empty");
-        if (switchFailed) return hold(text, "speech_model_or_switch_failed");
         if (conflictingSpeechLanguages) return hold(text, "conflicting_audio_languages");
-        if (speech != null && !inPair(speech, first, second)) return hold(text, "audio_outside_pair");
-        if (recognitionConfidence >= 0f && recognitionConfidence < 0.45f) {
-            return hold(text, "low_recognition_confidence");
+        if (speech != null && !inPair(speech, first, second)) {
+            return hold(text, "audio_outside_pair");
         }
         if (letterCount(text) == 0) return hold(text, "no_language_evidence");
 
-        String script = dominantNativeLanguage(text, first, second);
-        String textLanguage = confidentTextLanguage(textEvidence);
-        if (speech != null) {
-            // Exact known greetings are normalized only with independent audio evidence.
-            String restored = restoreGreeting(text, speech);
-            if (restored != null) return confirm(text, restored, speech, "audio_supported_greeting");
-            if (script != null && !script.equals(speech)) return hold(text, "audio_script_conflict");
-            if (textLanguage != null && !textLanguage.equals(speech)) {
-                return hold(text, "audio_text_conflict");
-            }
-            // Do not send Hangul transliterations, or unrelated scripts, to a foreign translator.
-            if (!scriptCompatible(text, speech)) return hold(text, "wrong_transcription_script");
-            return confirm(text, text, speech, "current_audio_evidence");
+        // v0.9: 선택한 두 언어 중 오직 한쪽에만 해당하는 대표 음차는
+        // 잘못된 한글 전사라도 그 외국어로 복원한다.
+        String restoredFirst = restoreGreeting(text, first);
+        String restoredSecond = restoreGreeting(text, second);
+        if (restoredFirst != null && restoredSecond == null) {
+            return confirm(text, restoredFirst, first, "pair_selected_phonetic_greeting");
+        }
+        if (restoredSecond != null && restoredFirst == null) {
+            return confirm(text, restoredSecond, second, "pair_selected_phonetic_greeting");
         }
 
-        // Text cannot repair audio transcribed by the wrong model. Known transliterations
-        // are held unless this utterance supplied independent foreign-language evidence.
-        if (restoreGreeting(text, first) != null || restoreGreeting(text, second) != null) {
-            return hold(text, "phonetic_text_needs_audio_evidence");
+        String script = dominantNativeLanguage(text, first, second);
+        String textLanguage = confidentTextLanguage(textEvidence);
+
+        if (speech != null) {
+            String restored = restoreGreeting(text, speech);
+            if (restored != null) {
+                return confirm(text, restored, speech, "audio_supported_greeting");
+            }
+
+            // 명확한 문자와 음성 태그가 충돌하면 억지 번역하지 않는다.
+            if (script != null && !script.equals(speech)) {
+                return hold(text, "audio_script_conflict");
+            }
+
+            // ML Kit 텍스트 판정은 보조 증거다. 명확한 음성 태그가 있으면
+            // 짧은 문장에서 텍스트 판정 하나만으로 차단하지 않는다.
+            if (textLanguage != null
+                    && !textLanguage.equals(speech)
+                    && script == null) {
+                return hold(text, "audio_text_conflict");
+            }
+
+            if (!scriptCompatible(text, speech)) {
+                return hold(text, "wrong_transcription_script");
+            }
+            return confirm(text, text, speech,
+                    switchFailed ? "current_audio_evidence_despite_switch_failure"
+                            : "current_audio_evidence");
         }
+
+        // v0.9: 한국어/중국어/일본어/태국어/러시아어/아랍어/힌디어처럼
+        // 문자가 분명한 경우 ML Kit 언어 ID가 늦거나 없더라도 바로 확정한다.
+        if (script != null) {
+            if (recognitionConfidence >= 0f && recognitionConfidence < 0.20f) {
+                return hold(text, "very_low_recognition_confidence");
+            }
+            return confirm(text, text, script,
+                    switchFailed ? "native_script_despite_switch_failure"
+                            : "native_script_evidence");
+        }
+
+        // 자동 언어전환 실패 자체만으로 모든 결과를 폐기하지 않는다.
+        // 현재 발화에서 다른 증거도 전혀 없을 때만 보류한다.
         if (textLanguage == null || !inPair(textLanguage, first, second)) {
-            return hold(text, textLanguage == null ? "uncertain_text_language" : "text_outside_pair");
+            if (switchFailed) return hold(text, "switch_failed_without_other_evidence");
+            return hold(text,
+                    textLanguage == null ? "uncertain_text_language" : "text_outside_pair");
         }
-        if (script != null && !script.equals(textLanguage)) return hold(text, "text_script_conflict");
-        if (!scriptCompatible(text, textLanguage)) return hold(text, "wrong_transcription_script");
-        // A short fragment or a person's name must not acquire the previous speaker's language.
-        if (letterCount(text) < 4 && !isShortReply(text, textLanguage)) {
-            return hold(text, "short_text_needs_audio_evidence");
+
+        if (recognitionConfidence >= 0f && recognitionConfidence < 0.25f) {
+            return hold(text, "very_low_recognition_confidence");
         }
-        return confirm(text, text, textLanguage, "current_text_evidence");
+        if (!scriptCompatible(text, textLanguage)) {
+            return hold(text, "wrong_transcription_script");
+        }
+        if (letterCount(text) < 3 && !isShortReply(text, textLanguage)) {
+            return hold(text, "short_text_needs_more_evidence");
+        }
+
+        return confirm(text, text, textLanguage,
+                switchFailed ? "text_evidence_despite_switch_failure"
+                        : "current_text_evidence");
     }
 
     private static String confidentTextLanguage(List<TextEvidence> evidence) {
@@ -103,8 +147,8 @@ public final class LanguageDecisionEngine {
                 }
             }
         }
-        return best != null && best.confidence >= 0.85f
-                && best.confidence - runnerUp >= 0.20f ? best.language : null;
+        return best != null && best.confidence >= 0.70f
+                && best.confidence - runnerUp >= 0.10f ? best.language : null;
     }
 
     public static String code(String tag) {

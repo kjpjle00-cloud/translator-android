@@ -157,12 +157,14 @@ public class AutoConversationEngine {
 
     private void startListeningNow() {
         if (!active || destroyed || processing || playbackPaused) return;
+
+        // v0.9: on-device model 상태는 "준비 힌트"일 뿐 듣기 시작의 전제조건이 아니다.
+        // 기본 SpeechRecognizer는 네트워크/기기 서비스를 사용할 수 있으므로,
+        // missingModels 때문에 마이크 자체를 막으면 자동대화가 영구 대기 상태에 빠질 수 있다.
         if (!missingModels.isEmpty()) {
-            notifyError("선택한 두 언어의 음성모델을 준비하고 있습니다. 자동대화는 유지됩니다.");
             prepareSpeechModels();
-            scheduleRestart(3000);
-            return;
         }
+
         retireRequest();
         Request request = new Request(generation, ++sequence);
         current = request;
@@ -273,10 +275,8 @@ public class AutoConversationEngine {
             List<LanguageDecisionEngine.TextEvidence> evidence) {
         if (!owns(request) || !processing) return;
         if (request.languageTimeout != null) handler.removeCallbacks(request.languageTimeout);
-        if (!missingModels.isEmpty()) {
-            retry(request, "음성모델 준비 중입니다. 준비 후 다시 말씀해 주세요.");
-            return;
-        }
+
+        // v0.9: 모델 다운로드 상태 때문에 이미 얻은 음성인식 결과를 버리지 않는다.
         LanguageDecisionEngine.Decision decision = LanguageDecisionEngine.decide(raw,
                 firstLanguage.code, secondLanguage.code, request.speechCode,
                 request.conflictingSpeech, request.switchFailed, score, evidence);
@@ -340,7 +340,7 @@ public class AutoConversationEngine {
             ArrayList<String> pair = new ArrayList<>(Arrays.asList(firstLanguage.speechTag, secondLanguage.speechTag));
             intent.putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_DETECTION, true);
             intent.putStringArrayListExtra(RecognizerIntent.EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES, pair);
-            intent.putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_SWITCH, RecognizerIntent.LANGUAGE_SWITCH_BALANCED);
+            intent.putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_SWITCH, RecognizerIntent.LANGUAGE_SWITCH_QUICK_RESPONSE);
             intent.putStringArrayListExtra(RecognizerIntent.EXTRA_LANGUAGE_SWITCH_ALLOWED_LANGUAGES, pair);
         }
         return intent;
@@ -378,10 +378,8 @@ public class AutoConversationEngine {
                                         requestModel(language, epoch);
                                     }
                                 }
-                                if (!missingModels.isEmpty() && !processing) {
-                                    retireRequest();
-                                    scheduleRestart(3000);
-                                }
+                                // v0.9: 모델 확인 콜백이 늦게 와도 현재 듣기를 취소하지 않는다.
+                                // 필요한 모델은 백그라운드에서 요청하되 자동대화는 계속 유지한다.
                             }
                             @Override public void onError(int error) {
                                 if (destroyed || epoch != generation) return;
