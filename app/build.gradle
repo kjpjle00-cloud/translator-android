@@ -10,8 +10,8 @@ android {
         applicationId 'com.kjpjle00.dailytranslator'
         minSdk 28
         targetSdk 36
-        versionCode 14
-        versionName '0.14.0-recognition-service'
+        versionCode 15
+        versionName '0.15.0-language-switch-diagnostic'
     }
 
     signingConfigs {

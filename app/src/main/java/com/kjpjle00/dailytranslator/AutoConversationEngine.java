@@ -1,10 +1,7 @@
 package com.kjpjle00.dailytranslator;
 
-import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
-import android.content.pm.PackageManager;
-import android.content.pm.ResolveInfo;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -12,7 +9,6 @@ import android.os.Looper;
 import android.os.SystemClock;
 import android.speech.ModelDownloadListener;
 import android.speech.RecognitionListener;
-import android.speech.RecognitionService;
 import android.speech.RecognitionSupport;
 import android.speech.RecognitionSupportCallback;
 import android.speech.RecognizerIntent;
@@ -26,7 +22,6 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Set;
 
 /** Persistent session; independent recognition evidence for every utterance. */
@@ -49,11 +44,6 @@ public class AutoConversationEngine {
     private AppLanguage firstLanguage = AppLanguage.KOREAN;
     private AppLanguage secondLanguage = AppLanguage.ENGLISH;
     private SpeechRecognizer modelRecognizer;
-    // v0.14: cache the selected RecognitionService. We prefer Google's service
-    // when it is installed because the system default on some devices may not
-    // implement two-language switching consistently.
-    private ComponentName preferredRecognitionService;
-    private boolean recognitionServiceResolved;
     private Request current;
     private long generation;
     private long sequence;
@@ -85,6 +75,8 @@ public class AutoConversationEngine {
         boolean conflictingSpeech;
         boolean switchFailed;
         boolean finalReceived;
+        boolean languageCallbackSeen;
+        String lastDiagnosticKey;
         Runnable languageTimeout;
         Request(long generation, long id) { this.generation = generation; this.id = id; }
     }
@@ -211,7 +203,7 @@ public class AutoConversationEngine {
         Request request = new Request(generation, ++sequence);
         current = request;
         try {
-            request.recognizer = createPreferredSpeechRecognizer();
+            request.recognizer = SpeechRecognizer.createSpeechRecognizer(context);
             request.recognizer.setRecognitionListener(listenerFor(request));
 
             String initial;
@@ -267,6 +259,9 @@ public class AutoConversationEngine {
                         SpeechRecognizer.LANGUAGE_SWITCH_RESULT,
                         SpeechRecognizer.LANGUAGE_SWITCH_RESULT_NOT_ATTEMPTED
                 );
+
+                request.languageCallbackSeen = true;
+                showLanguageDiagnostic(request, code, confidence, switched);
 
                 if (switched == SpeechRecognizer.LANGUAGE_SWITCH_RESULT_SUCCEEDED) {
                     request.switchFailed = false;
@@ -339,6 +334,15 @@ public class AutoConversationEngine {
                         + " candidateIndex=" + index
                         + " candidates=" + (candidates == null ? 0 : candidates.size())
                         + " reason=" + selected.reason); // No transcripts in logs.
+
+                if (!request.languageCallbackSeen) {
+                    notifyError(
+                            "진단 · 시작 "
+                                    + diagnosticLanguageName(request.initialCode)
+                                    + " · 언어감지 응답 없음"
+                    );
+                }
+
                 if (isPlaybackEcho(raw)) { retry(request, "번역음의 잔향을 제외하고 다시 듣습니다."); return; }
                 request.languageTimeout = () -> decide(request, raw, score, new ArrayList<>());
                 handler.postDelayed(request.languageTimeout, 2500);
@@ -424,6 +428,49 @@ public class AutoConversationEngine {
         processing = false;
         notifyError(message);
         scheduleRestart(600);
+    }
+
+    private void showLanguageDiagnostic(
+            Request request,
+            String detectedCode,
+            int confidence,
+            int switchResult
+    ) {
+        String key = request.initialCode
+                + "|" + detectedCode
+                + "|" + confidence
+                + "|" + switchResult;
+
+        if (key.equals(request.lastDiagnosticKey)) return;
+        request.lastDiagnosticKey = key;
+
+        String switchText;
+        if (switchResult == SpeechRecognizer.LANGUAGE_SWITCH_RESULT_SUCCEEDED) {
+            switchText = "전환 성공";
+        } else if (switchResult == SpeechRecognizer.LANGUAGE_SWITCH_RESULT_FAILED) {
+            switchText = "전환 실패";
+        } else if (switchResult == SpeechRecognizer.LANGUAGE_SWITCH_RESULT_SKIPPED_NO_MODEL) {
+            switchText = "전환 안 됨(모델 없음)";
+        } else {
+            switchText = "전환 시도 안 함";
+        }
+
+        notifyError(
+                "진단 · 시작 "
+                        + diagnosticLanguageName(request.initialCode)
+                        + " · 감지 "
+                        + diagnosticLanguageName(detectedCode)
+                        + "(" + confidence + ")"
+                        + " · " + switchText
+        );
+    }
+
+    private String diagnosticLanguageName(String code) {
+        code = LanguageDecisionEngine.code(code);
+        if (code == null) return "없음";
+        if (firstLanguage.code.equals(code)) return firstLanguage.name;
+        if (secondLanguage.code.equals(code)) return secondLanguage.name;
+        return code;
     }
 
     private String tagFor(String code) {
@@ -575,86 +622,6 @@ public class AutoConversationEngine {
         return result;
     }
 
-    private SpeechRecognizer createPreferredSpeechRecognizer() {
-        ComponentName service = resolvePreferredRecognitionService();
-
-        if (service != null) {
-            try {
-                return SpeechRecognizer.createSpeechRecognizer(context, service);
-            } catch (Exception e) {
-                Log.w(
-                        "DailyASR",
-                        "preferred recognition service unavailable; using system default"
-                );
-            }
-        }
-
-        return SpeechRecognizer.createSpeechRecognizer(context);
-    }
-
-    private ComponentName resolvePreferredRecognitionService() {
-        if (recognitionServiceResolved) {
-            return preferredRecognitionService;
-        }
-
-        recognitionServiceResolved = true;
-
-        try {
-            Intent query = new Intent(RecognitionService.SERVICE_INTERFACE);
-            List<ResolveInfo> services = context
-                    .getPackageManager()
-                    .queryIntentServices(query, PackageManager.MATCH_DEFAULT_ONLY);
-
-            ComponentName googleCandidate = null;
-
-            for (ResolveInfo info : services) {
-                if (info == null || info.serviceInfo == null) continue;
-
-                String pkg = info.serviceInfo.packageName == null
-                        ? ""
-                        : info.serviceInfo.packageName.toLowerCase(Locale.ROOT);
-
-                String name = info.serviceInfo.name == null
-                        ? ""
-                        : info.serviceInfo.name.toLowerCase(Locale.ROOT);
-
-                ComponentName component = new ComponentName(
-                        info.serviceInfo.packageName,
-                        info.serviceInfo.name
-                );
-
-                // Google's main search app is the strongest preference because
-                // it commonly provides the Google speech RecognitionService.
-                if ("com.google.android.googlequicksearchbox".equals(pkg)) {
-                    preferredRecognitionService = component;
-                    Log.d("DailyASR", "recognitionService=google-search");
-                    return preferredRecognitionService;
-                }
-
-                // Otherwise keep a Google speech/recognition service candidate.
-                if (pkg.startsWith("com.google.")
-                        && (name.contains("recognition")
-                        || name.contains("speech")
-                        || name.contains("voice"))) {
-                    googleCandidate = component;
-                }
-            }
-
-            if (googleCandidate != null) {
-                preferredRecognitionService = googleCandidate;
-                Log.d("DailyASR", "recognitionService=google");
-                return preferredRecognitionService;
-            }
-        } catch (Exception e) {
-            Log.w("DailyASR", "recognition service discovery failed");
-        }
-
-        // null = preserve Android's normal system-default behavior.
-        preferredRecognitionService = null;
-        Log.d("DailyASR", "recognitionService=system-default");
-        return null;
-    }
-
     public void prepareSpeechModels() {
         onMain(() -> {
             if (destroyed || Build.VERSION.SDK_INT < 33 || !isAvailable()) return;
@@ -663,11 +630,19 @@ public class AutoConversationEngine {
             lastModelRequest = now;
             final long epoch = generation;
             try {
-                if (modelRecognizer == null) modelRecognizer = createPreferredSpeechRecognizer();
+                if (modelRecognizer == null) modelRecognizer = SpeechRecognizer.createSpeechRecognizer(context);
                 modelRecognizer.checkRecognitionSupport(recognizerIntent(firstLanguage.speechTag),
                         context.getMainExecutor(), new RecognitionSupportCallback() {
                             @Override public void onSupportResult(RecognitionSupport support) {
                                 if (destroyed || epoch != generation) return;
+
+                                notifyError(
+                                        "진단 · 음성모델 "
+                                                + modelDiagnostic(firstLanguage, support)
+                                                + " / "
+                                                + modelDiagnostic(secondLanguage, support)
+                                );
+
                                 for (AppLanguage language : new AppLanguage[]{firstLanguage, secondLanguage}) {
                                     if (containsLanguage(support.getInstalledOnDeviceLanguages(), language.code)) {
                                         missingModels.remove(language.code);
@@ -693,6 +668,22 @@ public class AutoConversationEngine {
                 notifyError("음성모델 준비 상태를 확인할 수 없습니다. 인식 결과를 검증하며 듣습니다.");
             }
         });
+    }
+
+    private String modelDiagnostic(AppLanguage language, RecognitionSupport support) {
+        if (containsLanguage(support.getInstalledOnDeviceLanguages(), language.code)) {
+            return language.name + " 설치됨";
+        }
+        if (containsLanguage(support.getPendingOnDeviceLanguages(), language.code)) {
+            return language.name + " 다운로드중";
+        }
+        if (containsLanguage(support.getSupportedOnDeviceLanguages(), language.code)) {
+            return language.name + " 다운로드필요";
+        }
+        if (containsLanguage(support.getOnlineLanguages(), language.code)) {
+            return language.name + " 온라인";
+        }
+        return language.name + " 미지원/미확인";
     }
 
     private boolean containsLanguage(List<String> tags, String code) {
