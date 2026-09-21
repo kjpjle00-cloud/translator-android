@@ -1,7 +1,10 @@
 package com.kjpjle00.dailytranslator;
 
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -9,6 +12,7 @@ import android.os.Looper;
 import android.os.SystemClock;
 import android.speech.ModelDownloadListener;
 import android.speech.RecognitionListener;
+import android.speech.RecognitionService;
 import android.speech.RecognitionSupport;
 import android.speech.RecognitionSupportCallback;
 import android.speech.RecognizerIntent;
@@ -22,6 +26,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 /** Persistent session; independent recognition evidence for every utterance. */
@@ -44,6 +49,11 @@ public class AutoConversationEngine {
     private AppLanguage firstLanguage = AppLanguage.KOREAN;
     private AppLanguage secondLanguage = AppLanguage.ENGLISH;
     private SpeechRecognizer modelRecognizer;
+    // v0.14: cache the selected RecognitionService. We prefer Google's service
+    // when it is installed because the system default on some devices may not
+    // implement two-language switching consistently.
+    private ComponentName preferredRecognitionService;
+    private boolean recognitionServiceResolved;
     private Request current;
     private long generation;
     private long sequence;
@@ -201,7 +211,7 @@ public class AutoConversationEngine {
         Request request = new Request(generation, ++sequence);
         current = request;
         try {
-            request.recognizer = SpeechRecognizer.createSpeechRecognizer(context);
+            request.recognizer = createPreferredSpeechRecognizer();
             request.recognizer.setRecognitionListener(listenerFor(request));
 
             String initial;
@@ -565,6 +575,86 @@ public class AutoConversationEngine {
         return result;
     }
 
+    private SpeechRecognizer createPreferredSpeechRecognizer() {
+        ComponentName service = resolvePreferredRecognitionService();
+
+        if (service != null) {
+            try {
+                return SpeechRecognizer.createSpeechRecognizer(context, service);
+            } catch (Exception e) {
+                Log.w(
+                        "DailyASR",
+                        "preferred recognition service unavailable; using system default"
+                );
+            }
+        }
+
+        return SpeechRecognizer.createSpeechRecognizer(context);
+    }
+
+    private ComponentName resolvePreferredRecognitionService() {
+        if (recognitionServiceResolved) {
+            return preferredRecognitionService;
+        }
+
+        recognitionServiceResolved = true;
+
+        try {
+            Intent query = new Intent(RecognitionService.SERVICE_INTERFACE);
+            List<ResolveInfo> services = context
+                    .getPackageManager()
+                    .queryIntentServices(query, PackageManager.MATCH_DEFAULT_ONLY);
+
+            ComponentName googleCandidate = null;
+
+            for (ResolveInfo info : services) {
+                if (info == null || info.serviceInfo == null) continue;
+
+                String pkg = info.serviceInfo.packageName == null
+                        ? ""
+                        : info.serviceInfo.packageName.toLowerCase(Locale.ROOT);
+
+                String name = info.serviceInfo.name == null
+                        ? ""
+                        : info.serviceInfo.name.toLowerCase(Locale.ROOT);
+
+                ComponentName component = new ComponentName(
+                        info.serviceInfo.packageName,
+                        info.serviceInfo.name
+                );
+
+                // Google's main search app is the strongest preference because
+                // it commonly provides the Google speech RecognitionService.
+                if ("com.google.android.googlequicksearchbox".equals(pkg)) {
+                    preferredRecognitionService = component;
+                    Log.d("DailyASR", "recognitionService=google-search");
+                    return preferredRecognitionService;
+                }
+
+                // Otherwise keep a Google speech/recognition service candidate.
+                if (pkg.startsWith("com.google.")
+                        && (name.contains("recognition")
+                        || name.contains("speech")
+                        || name.contains("voice"))) {
+                    googleCandidate = component;
+                }
+            }
+
+            if (googleCandidate != null) {
+                preferredRecognitionService = googleCandidate;
+                Log.d("DailyASR", "recognitionService=google");
+                return preferredRecognitionService;
+            }
+        } catch (Exception e) {
+            Log.w("DailyASR", "recognition service discovery failed");
+        }
+
+        // null = preserve Android's normal system-default behavior.
+        preferredRecognitionService = null;
+        Log.d("DailyASR", "recognitionService=system-default");
+        return null;
+    }
+
     public void prepareSpeechModels() {
         onMain(() -> {
             if (destroyed || Build.VERSION.SDK_INT < 33 || !isAvailable()) return;
@@ -573,7 +663,7 @@ public class AutoConversationEngine {
             lastModelRequest = now;
             final long epoch = generation;
             try {
-                if (modelRecognizer == null) modelRecognizer = SpeechRecognizer.createSpeechRecognizer(context);
+                if (modelRecognizer == null) modelRecognizer = createPreferredSpeechRecognizer();
                 modelRecognizer.checkRecognitionSupport(recognizerIntent(firstLanguage.speechTag),
                         context.getMainExecutor(), new RecognitionSupportCallback() {
                             @Override public void onSupportResult(RecognitionSupport support) {

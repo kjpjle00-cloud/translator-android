@@ -10,8 +10,8 @@ android {
         applicationId 'com.kjpjle00.dailytranslator'
         minSdk 28
         targetSdk 36
-        versionCode 12
-        versionName '0.12.0-consecutive-speaker-fix'
+        versionCode 14
+        versionName '0.14.0-recognition-service'
     }
 
     signingConfigs {
