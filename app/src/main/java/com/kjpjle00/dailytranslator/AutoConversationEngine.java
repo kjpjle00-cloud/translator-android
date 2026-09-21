@@ -393,15 +393,13 @@ public class AutoConversationEngine {
         }
         String tag = tagFor(decision.sourceCode);
 
-        // v0.10 soft-turn priming:
-        // Korean -> Chinese playback means the next recognizer starts in Chinese.
-        // Chinese -> Korean playback means the next recognizer starts in Korean.
-        // This is NOT a forced turn: both languages remain enabled for auto switch.
-        if (firstLanguage.code.equals(decision.sourceCode)) {
-            nextInitialLanguageTag = secondLanguage.speechTag;
-        } else if (secondLanguage.code.equals(decision.sourceCode)) {
-            nextInitialLanguageTag = firstLanguage.speechTag;
-        }
+        // v0.12 consecutive-speaker fix:
+        // Do NOT force the next request to start in the opposite language.
+        // The same person may pause and continue speaking.
+        // Keep the language that was actually confirmed for this utterance as the
+        // next request's initial language. Android language detection/switch still
+        // has both selected languages enabled, so a real counterpart can switch it.
+        nextInitialLanguageTag = tag;
         retryLanguage = null;
 
         retireRequest();
